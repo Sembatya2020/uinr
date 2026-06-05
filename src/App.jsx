@@ -1,0 +1,1842 @@
+import React, { useState, useEffect, useMemo, useReducer, useCallback } from 'react';
+import {
+  Shield, LogIn, LayoutDashboard, GraduationCap, Hospital, Users2, FileClock,
+  KeyRound, Settings as SettingsIcon, LogOut, Search, Plus, Pencil, Trash2,
+  X, ChevronUp, ChevronDown, Download, CheckCircle2, AlertTriangle, Info,
+  Menu, Building2, MapPin, Activity, Syringe, UserCog, Eye, Filter, ShieldCheck,
+  ShieldAlert, RefreshCcw, Save, Lock, TrendingUp, TrendingDown, BellRing,
+  Sparkles, ArrowRight, School, Stethoscope, BarChart3, Globe2
+} from 'lucide-react';
+
+/* ===========================================================
+   UINR — Uganda Integrated National Registry
+   Single-file React app
+   =========================================================== */
+
+const DISTRICTS = ['Kampala','Wakiso','Gulu','Mbarara','Jinja','Mbale','Lira','Arua','Masaka','Fort Portal'];
+const LEVELS = ['P1','P2','P3','P4','P5','P6','P7','S1','S2','S3','S4','S5','S6','University'];
+const STUDENT_STATUSES = ['Enrolled','Dropped Out','Graduated'];
+const FACILITY_LEVELS = ['HC II','HC III','General Hospital','Regional Referral'];
+const STOCK_STATUSES = ['Adequate','Low','Critical'];
+const CLANS = ['Nkima','Ngabi','Ffumbe','Nte','Ngo','Ngonge','Mamba','Ngeye'];
+const TRIBES = ['Baganda','Acholi','Banyankole','Basoga','Bagisu','Langi','Lugbara','Banyoro','Batoro'];
+
+const USERS = [
+  { username: 'admin',     password: 'uinr2024', role: 'Super Admin',        name: 'Florence Akello',  district: 'Kampala' },
+  { username: 'officer',   password: 'uinr2024', role: 'Ministry Officer',   name: 'Patrick Mukasa',   district: 'Kampala' },
+  { username: 'registrar', password: 'uinr2024', role: 'District Registrar', name: 'Grace Atim',       district: 'Gulu'    }
+];
+
+const ROLE_DESCRIPTIONS = {
+  'Super Admin':         'Full system access. Can manage users, modify any record, view all audit logs, and configure system settings.',
+  'Ministry Officer':    'Read-only access to all districts. Can view and export records, run reports, and review audit history — cannot edit or delete.',
+  'District Registrar':  'Restricted to their assigned district. Can create, edit, and view records only within their district boundary.'
+};
+
+/* ---------- Demo data ---------- */
+const nin = (i) => `CM${String(90000000 + i).padStart(11,'0')}UG`;
+
+const INITIAL_STUDENTS = [
+  { id:1,  name:'Nakato Sarah',       nin:nin(1),  school:'Gayaza High School',           district:'Wakiso',     level:'S4', enrolmentYear:2021, unebResults:'Div 1', status:'Enrolled',     guardianNin:nin(101) },
+  { id:2,  name:'Okello Brian',       nin:nin(2),  school:'Sir Samuel Baker',             district:'Gulu',       level:'S6', enrolmentYear:2019, unebResults:'Div 2', status:'Enrolled',     guardianNin:nin(102) },
+  { id:3,  name:'Namukasa Patricia',  nin:nin(3),  school:'Kibuli SS',                     district:'Kampala',    level:'S2', enrolmentYear:2023, unebResults:'—',     status:'Enrolled',     guardianNin:nin(103) },
+  { id:4,  name:'Ssali Daniel',       nin:nin(4),  school:'Makerere University',           district:'Kampala',    level:'University', enrolmentYear:2022, unebResults:'Div 1', status:'Enrolled', guardianNin:nin(104) },
+  { id:5,  name:'Apio Florence',      nin:nin(5),  school:'Lira Town College',             district:'Lira',       level:'S3', enrolmentYear:2022, unebResults:'—',     status:'Enrolled',     guardianNin:nin(105) },
+  { id:6,  name:'Tusiime Brenda',     nin:nin(6),  school:'Mbarara High School',           district:'Mbarara',    level:'S5', enrolmentYear:2020, unebResults:'Div 1', status:'Enrolled',     guardianNin:nin(106) },
+  { id:7,  name:'Mugisha Allan',      nin:nin(7),  school:'Ntare School',                  district:'Mbarara',    level:'S6', enrolmentYear:2019, unebResults:'Div 1', status:'Graduated',    guardianNin:nin(107) },
+  { id:8,  name:'Atim Joyce',         nin:nin(8),  school:'Gulu High School',              district:'Gulu',       level:'P7', enrolmentYear:2024, unebResults:'—',     status:'Enrolled',     guardianNin:nin(108) },
+  { id:9,  name:'Kyambadde Moses',    nin:nin(9),  school:'Kings College Budo',            district:'Wakiso',     level:'S5', enrolmentYear:2020, unebResults:'Div 1', status:'Enrolled',     guardianNin:nin(109) },
+  { id:10, name:'Namutebi Rebecca',   nin:nin(10), school:'Nabisunsa Girls',               district:'Kampala',    level:'S4', enrolmentYear:2021, unebResults:'Div 2', status:'Enrolled',     guardianNin:nin(110) },
+  { id:11, name:'Wasswa Isaac',       nin:nin(11), school:'Jinja SS',                      district:'Jinja',      level:'S3', enrolmentYear:2022, unebResults:'—',     status:'Dropped Out',  guardianNin:nin(111) },
+  { id:12, name:'Nalwoga Esther',     nin:nin(12), school:'Mt. St. Mary\'s Namagunga',     district:'Wakiso',     level:'S6', enrolmentYear:2019, unebResults:'Div 1', status:'Graduated',    guardianNin:nin(112) },
+  { id:13, name:'Ochieng Peter',      nin:nin(13), school:'Mbale SS',                      district:'Mbale',      level:'S4', enrolmentYear:2021, unebResults:'Div 2', status:'Enrolled',     guardianNin:nin(113) },
+  { id:14, name:'Mbabazi Diana',      nin:nin(14), school:'St. Mary\'s Kitende',           district:'Wakiso',     level:'P6', enrolmentYear:2024, unebResults:'—',     status:'Enrolled',     guardianNin:nin(114) },
+  { id:15, name:'Asiimwe Joel',       nin:nin(15), school:'Fort Portal SS',                district:'Fort Portal',level:'S5', enrolmentYear:2020, unebResults:'Div 1', status:'Enrolled',     guardianNin:nin(115) },
+  { id:16, name:'Okello Faith',       nin:nin(16), school:'Arua Public SS',                district:'Arua',       level:'S3', enrolmentYear:2022, unebResults:'—',     status:'Enrolled',     guardianNin:nin(116) },
+  { id:17, name:'Mugisha Ronald',     nin:nin(17), school:'Masaka SS',                     district:'Masaka',     level:'S4', enrolmentYear:2021, unebResults:'Div 1', status:'Enrolled',     guardianNin:nin(117) }
+];
+
+const INITIAL_HOSPITALS = [
+  { id:1, name:'Mulago National Referral Hospital', level:'Regional Referral', district:'Kampala',    inCharge:'Dr. Rosemary Byanyima', beds:1500, stock:'Adequate', lastInspection:'2026-04-12', visits:24130, vacCoverage:92 },
+  { id:2, name:'Butabika National Mental Hospital', level:'Regional Referral', district:'Kampala',    inCharge:'Dr. Juliet Nakku',      beds:550,  stock:'Adequate', lastInspection:'2026-03-28', visits:7820,  vacCoverage:88 },
+  { id:3, name:'Mbarara Regional Referral',          level:'Regional Referral', district:'Mbarara',    inCharge:'Dr. Henry Tumwesigye',  beds:600,  stock:'Low',      lastInspection:'2026-02-15', visits:13420, vacCoverage:85 },
+  { id:4, name:'Gulu Regional Referral',             level:'Regional Referral', district:'Gulu',       inCharge:'Dr. Nathan Onyachi',    beds:330,  stock:'Adequate', lastInspection:'2026-05-02', visits:9012,  vacCoverage:80 },
+  { id:5, name:'Lacor Hospital',                     level:'General Hospital',  district:'Gulu',       inCharge:'Dr. Cyprian Opira',     beds:482,  stock:'Adequate', lastInspection:'2026-04-22', visits:15680, vacCoverage:91 },
+  { id:6, name:'Jinja Regional Referral',            level:'Regional Referral', district:'Jinja',      inCharge:'Dr. Edward Nkurunziza', beds:610,  stock:'Critical', lastInspection:'2026-01-30', visits:11240, vacCoverage:78 },
+  { id:7, name:'Mbale Regional Referral',            level:'Regional Referral', district:'Mbale',      inCharge:'Dr. Emmanuel Tugaineyo',beds:400,  stock:'Low',      lastInspection:'2026-03-11', visits:8930,  vacCoverage:82 },
+  { id:8, name:'Wakiso HC IV',                       level:'HC III',            district:'Wakiso',     inCharge:'Sr. Margaret Naluyima', beds:60,   stock:'Adequate', lastInspection:'2026-05-18', visits:3420,  vacCoverage:87 },
+  { id:9, name:'Lira HC III',                        level:'HC III',            district:'Lira',       inCharge:'Mr. James Okumu',       beds:48,   stock:'Low',      lastInspection:'2026-04-05', visits:2810,  vacCoverage:75 },
+  { id:10,name:'Fort Portal Regional Referral',      level:'Regional Referral', district:'Fort Portal',inCharge:'Dr. Allan Muhwezi',     beds:380,  stock:'Adequate', lastInspection:'2026-05-09', visits:7610,  vacCoverage:84 },
+  { id:11,name:'Arua Regional Referral',             level:'Regional Referral', district:'Arua',       inCharge:'Dr. Pauline Adiru',     beds:340,  stock:'Adequate', lastInspection:'2026-04-30', visits:6940,  vacCoverage:79 },
+  { id:12,name:'Masaka HC III',                      level:'HC III',            district:'Masaka',     inCharge:'Sr. Joan Nakimuli',     beds:55,   stock:'Adequate', lastInspection:'2026-05-15', visits:3120,  vacCoverage:86 }
+];
+
+const INITIAL_FAMILIES = [
+  {
+    id:1, head:'Ssali Joseph', nin:nin(201), clan:'Nkima', tribe:'Baganda', village:'Mpigi',     district:'Wakiso',     members:6, marriage:'Monogamous',
+    tree:{ grandparents:[{name:'Ssali Yusuf', nin:nin(901)},{name:'Nakato Esther', nin:nin(902)}],
+           parents:[{name:'Ssali Joseph', nin:nin(201)},{name:'Namusoke Mary', nin:nin(202)}],
+           children:[{name:'Ssali Daniel', nin:nin(4)},{name:'Namutebi Rebecca', nin:nin(10)}] }
+  },
+  {
+    id:2, head:'Okello Patrick', nin:nin(203), clan:'Ngabi', tribe:'Acholi', village:'Pece',     district:'Gulu',
+    members:8, marriage:'Polygamous',
+    tree:{ grandparents:[{name:'Okello Lakana', nin:nin(903)},{name:'Aceng Susan', nin:nin(904)}],
+           parents:[{name:'Okello Patrick', nin:nin(203)},{name:'Lamwaka Beatrice', nin:nin(204)}],
+           children:[{name:'Okello Brian', nin:nin(2)},{name:'Atim Joyce', nin:nin(8)},{name:'Okello Faith', nin:nin(16)}] }
+  },
+  {
+    id:3, head:'Tusiime Robert', nin:nin(205), clan:'Nte', tribe:'Banyankole', village:'Rwizi',  district:'Mbarara',
+    members:5, marriage:'Monogamous',
+    tree:{ grandparents:[{name:'Tusiime Yowasi', nin:nin(905)},{name:'Komuhangi Faith', nin:nin(906)}],
+           parents:[{name:'Tusiime Robert', nin:nin(205)},{name:'Atuhaire Joy', nin:nin(206)}],
+           children:[{name:'Tusiime Brenda', nin:nin(6)},{name:'Mugisha Allan', nin:nin(7)}] }
+  },
+  {
+    id:4, head:'Wasswa Henry', nin:nin(207), clan:'Ffumbe', tribe:'Basoga', village:'Bugembe',   district:'Jinja',
+    members:4, marriage:'Monogamous',
+    tree:{ grandparents:[{name:'Wasswa Charles', nin:nin(907)},{name:'Nabirye Robinah', nin:nin(908)}],
+           parents:[{name:'Wasswa Henry', nin:nin(207)},{name:'Babirye Sarah', nin:nin(208)}],
+           children:[{name:'Wasswa Isaac', nin:nin(11)}] }
+  },
+  {
+    id:5, head:'Mbabazi Andrew', nin:nin(209), clan:'Ngo', tribe:'Banyankole', village:'Kitende',district:'Wakiso',
+    members:5, marriage:'Monogamous',
+    tree:{ grandparents:[{name:'Mbabazi Silas', nin:nin(909)},{name:'Kyomuhendo Jane', nin:nin(910)}],
+           parents:[{name:'Mbabazi Andrew', nin:nin(209)},{name:'Kobusinge Diana', nin:nin(210)}],
+           children:[{name:'Mbabazi Diana', nin:nin(14)},{name:'Nakato Sarah', nin:nin(1)}] }
+  },
+  {
+    id:6, head:'Ochieng Samuel', nin:nin(211), clan:'Ngonge', tribe:'Bagisu', village:'Bungokho',district:'Mbale',
+    members:6, marriage:'Polygamous',
+    tree:{ grandparents:[{name:'Ochieng Otieno', nin:nin(911)},{name:'Auma Phoebe', nin:nin(912)}],
+           parents:[{name:'Ochieng Samuel', nin:nin(211)},{name:'Nambozo Lydia', nin:nin(212)}],
+           children:[{name:'Ochieng Peter', nin:nin(13)}] }
+  },
+  {
+    id:7, head:'Asiimwe Bosco', nin:nin(213), clan:'Mamba', tribe:'Batoro', village:'Kabarole',  district:'Fort Portal',
+    members:5, marriage:'Monogamous',
+    tree:{ grandparents:[{name:'Asiimwe Erinayo', nin:nin(913)},{name:'Kabugho Margaret', nin:nin(914)}],
+           parents:[{name:'Asiimwe Bosco', nin:nin(213)},{name:'Mbabazi Grace', nin:nin(214)}],
+           children:[{name:'Asiimwe Joel', nin:nin(15)}] }
+  },
+  {
+    id:8, head:'Kyambadde Paul', nin:nin(215), clan:'Ngeye', tribe:'Baganda', village:'Busega',  district:'Kampala',
+    members:7, marriage:'Monogamous',
+    tree:{ grandparents:[{name:'Kyambadde Erasmus', nin:nin(915)},{name:'Nakawunde Eve', nin:nin(916)}],
+           parents:[{name:'Kyambadde Paul', nin:nin(215)},{name:'Namaganda Ruth', nin:nin(216)}],
+           children:[{name:'Kyambadde Moses', nin:nin(9)},{name:'Namukasa Patricia', nin:nin(3)},{name:'Nalwoga Esther', nin:nin(12)}] }
+  }
+];
+
+const INITIAL_AUDIT = [
+  { id:1,  ts:'2026-06-05 09:12', action:'Edited',  module:'Students',  record:'Nakato Sarah',      by:'Florence Akello',  role:'Super Admin',        district:'Kampala' },
+  { id:2,  ts:'2026-06-05 08:55', action:'Created', module:'Hospitals', record:'Wakiso HC IV',      by:'Patrick Mukasa',   role:'Ministry Officer',   district:'Kampala' },
+  { id:3,  ts:'2026-06-04 16:40', action:'Viewed',  module:'Families',  record:'Okello Patrick',    by:'Grace Atim',       role:'District Registrar', district:'Gulu'    },
+  { id:4,  ts:'2026-06-04 14:22', action:'Edited',  module:'Students',  record:'Okello Brian',      by:'Grace Atim',       role:'District Registrar', district:'Gulu'    },
+  { id:5,  ts:'2026-06-04 11:08', action:'Created', module:'Students',  record:'Apio Florence',     by:'Florence Akello',  role:'Super Admin',        district:'Lira'    },
+  { id:6,  ts:'2026-06-04 09:30', action:'Edited',  module:'Hospitals', record:'Mbarara Regional',  by:'Patrick Mukasa',   role:'Ministry Officer',   district:'Mbarara' },
+  { id:7,  ts:'2026-06-03 17:14', action:'Deleted', module:'Students',  record:'Test Record',       by:'Florence Akello',  role:'Super Admin',        district:'Kampala' },
+  { id:8,  ts:'2026-06-03 15:02', action:'Edited',  module:'Families',  record:'Tusiime Robert',    by:'Florence Akello',  role:'Super Admin',        district:'Mbarara' },
+  { id:9,  ts:'2026-06-03 12:48', action:'Viewed',  module:'Students',  record:'Mugisha Allan',     by:'Patrick Mukasa',   role:'Ministry Officer',   district:'Mbarara' },
+  { id:10, ts:'2026-06-03 10:20', action:'Created', module:'Families',  record:'Ochieng Samuel',    by:'Florence Akello',  role:'Super Admin',        district:'Mbale'   },
+  { id:11, ts:'2026-06-02 16:55', action:'Edited',  module:'Hospitals', record:'Lacor Hospital',    by:'Patrick Mukasa',   role:'Ministry Officer',   district:'Gulu'    },
+  { id:12, ts:'2026-06-02 14:30', action:'Edited',  module:'Students',  record:'Atim Joyce',        by:'Grace Atim',       role:'District Registrar', district:'Gulu'    },
+  { id:13, ts:'2026-06-02 11:10', action:'Viewed',  module:'Audit',     record:'Audit Export',      by:'Florence Akello',  role:'Super Admin',        district:'Kampala' },
+  { id:14, ts:'2026-06-01 17:42', action:'Edited',  module:'Hospitals', record:'Jinja Regional',    by:'Florence Akello',  role:'Super Admin',        district:'Jinja'   },
+  { id:15, ts:'2026-06-01 14:18', action:'Created', module:'Students',  record:'Ochieng Peter',     by:'Patrick Mukasa',   role:'Ministry Officer',   district:'Mbale'   },
+  { id:16, ts:'2026-06-01 10:05', action:'Edited',  module:'Families',  record:'Kyambadde Paul',    by:'Florence Akello',  role:'Super Admin',        district:'Kampala' },
+  { id:17, ts:'2026-05-31 16:00', action:'Viewed',  module:'Hospitals', record:'Mulago National',   by:'Patrick Mukasa',   role:'Ministry Officer',   district:'Kampala' },
+  { id:18, ts:'2026-05-31 12:25', action:'Created', module:'Hospitals', record:'Masaka HC III',     by:'Florence Akello',  role:'Super Admin',        district:'Masaka'  },
+  { id:19, ts:'2026-05-30 15:40', action:'Edited',  module:'Students',  record:'Asiimwe Joel',      by:'Patrick Mukasa',   role:'Ministry Officer',   district:'Fort Portal' },
+  { id:20, ts:'2026-05-30 09:12', action:'Edited',  module:'Roles',     record:'User: officer',     by:'Florence Akello',  role:'Super Admin',        district:'Kampala' },
+  { id:21, ts:'2026-05-29 14:08', action:'Created', module:'Families',  record:'Asiimwe Bosco',     by:'Florence Akello',  role:'Super Admin',        district:'Fort Portal' },
+  { id:22, ts:'2026-05-29 10:30', action:'Viewed',  module:'Students',  record:'Wasswa Isaac',      by:'Grace Atim',       role:'District Registrar', district:'Gulu'    }
+];
+
+const INITIAL_ADMINS = [
+  { id:1, name:'Florence Akello',  username:'admin',     role:'Super Admin',        district:'Kampala', status:'Active' },
+  { id:2, name:'Patrick Mukasa',   username:'officer',   role:'Ministry Officer',   district:'Kampala', status:'Active' },
+  { id:3, name:'Grace Atim',       username:'registrar', role:'District Registrar', district:'Gulu',    status:'Active' },
+  { id:4, name:'Samuel Wandera',   username:'swandera',  role:'District Registrar', district:'Mbale',   status:'Active' },
+  { id:5, name:'Joan Nansubuga',   username:'jnansubuga',role:'Ministry Officer',   district:'Kampala', status:'Suspended' },
+  { id:6, name:'Andrew Mugume',    username:'amugume',   role:'District Registrar', district:'Mbarara', status:'Active' }
+];
+
+const INITIAL_SYNC = DISTRICTS.map((d, i) => ({ district:d, status: i % 4 === 2 ? 'Syncing' : 'Synced', lastSync: `2026-06-05 ${String(7 + (i%6)).padStart(2,'0')}:${String(10 + i*4).padStart(2,'0')}` }));
+
+/* ===========================================================
+   Toast system
+   =========================================================== */
+function useToasts() {
+  const [toasts, setToasts] = useState([]);
+  const push = useCallback((type, message) => {
+    const id = Date.now() + Math.random();
+    setToasts(t => [...t, { id, type, message }]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3500);
+  }, []);
+  return { toasts, push };
+}
+
+function ToastStack({ toasts }) {
+  return (
+    <div className="fixed bottom-5 right-5 z-[1000] flex flex-col gap-2">
+      {toasts.map(t => {
+        const style = t.type === 'success'
+          ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+          : t.type === 'error'
+          ? 'bg-red-50 border-red-300 text-red-900'
+          : 'bg-sky-50 border-sky-300 text-sky-900';
+        const Icon = t.type === 'success' ? CheckCircle2 : t.type === 'error' ? AlertTriangle : Info;
+        return (
+          <div key={t.id} className={`flex items-center gap-2 border ${style} px-4 py-2.5 rounded-lg shadow-md min-w-[260px]`}>
+            <Icon size={18} />
+            <span className="text-sm font-medium">{t.message}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ===========================================================
+   CSV export
+   =========================================================== */
+function exportCSV(filename, rows, columns) {
+  const header = columns.map(c => `"${c.label}"`).join(',');
+  const body = rows.map(r => columns.map(c => {
+    const v = typeof c.value === 'function' ? c.value(r) : r[c.key];
+    const s = v == null ? '' : String(v).replace(/"/g, '""');
+    return `"${s}"`;
+  }).join(',')).join('\n');
+  const blob = new Blob([header + '\n' + body], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* ===========================================================
+   Modal primitive
+   =========================================================== */
+function Modal({ open, onClose, title, children, footer, wide=false }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[900] bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className={`bg-white rounded-xl shadow-2xl w-full ${wide ? 'max-w-5xl' : 'max-w-2xl'} max-h-[90vh] flex flex-col`}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+          <h3 className="text-lg font-semibold text-uinr">{title}</h3>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-900 rounded-lg p-1 hover:bg-slate-100" aria-label="Close">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="px-6 py-5 overflow-auto flex-1">{children}</div>
+        {footer && <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 rounded-b-xl flex justify-end gap-2">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Status badge
+   =========================================================== */
+function Badge({ kind, children }) {
+  const styles = {
+    green:  'bg-emerald-100 text-emerald-800 border-emerald-200',
+    amber:  'bg-amber-100 text-amber-800 border-amber-200',
+    red:    'bg-red-100 text-red-800 border-red-200',
+    blue:   'bg-sky-100 text-sky-800 border-sky-200',
+    gray:   'bg-slate-100 text-slate-700 border-slate-200'
+  };
+  return <span className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 border rounded-full ${styles[kind]}`}>{children}</span>;
+}
+
+const statusKind = (s) => {
+  if (['Enrolled','Active','Approved','Synced','Adequate','Graduated'].includes(s)) return 'green';
+  if (['Pending','Syncing','Low'].includes(s)) return 'amber';
+  if (['Critical','Suspended','Dropped Out'].includes(s)) return 'red';
+  return 'gray';
+};
+
+/* ===========================================================
+   Sortable table helper
+   =========================================================== */
+function useSorted(rows, defaultKey) {
+  const [sortKey, setSortKey] = useState(defaultKey);
+  const [sortDir, setSortDir] = useState('asc');
+  const sorted = useMemo(() => {
+    const arr = [...rows];
+    arr.sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      if (av == null) return 1; if (bv == null) return -1;
+      if (typeof av === 'number' && typeof bv === 'number') return sortDir === 'asc' ? av - bv : bv - av;
+      return sortDir === 'asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+    });
+    return arr;
+  }, [rows, sortKey, sortDir]);
+  const headerClick = (k) => {
+    if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(k); setSortDir('asc'); }
+  };
+  const SortIcon = ({ k }) => sortKey !== k
+    ? <span className="inline-block w-3" />
+    : sortDir === 'asc' ? <ChevronUp size={14} className="inline" /> : <ChevronDown size={14} className="inline" />;
+  return { sorted, sortKey, sortDir, headerClick, SortIcon };
+}
+
+/* ===========================================================
+   Login screen
+   =========================================================== */
+function LoginScreen({ onLogin, pushToast }) {
+  const [username, setUsername] = useState('admin');
+  const [password, setPassword] = useState('uinr2024');
+  const [role, setRole] = useState('Super Admin');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    setTimeout(() => {
+      const found = USERS.find(u => u.username === username.trim() && u.password === password && u.role === role);
+      setLoading(false);
+      if (!found) {
+        setError('Invalid credentials or role mismatch. Check the demo credentials below.');
+        pushToast('error', 'Login failed');
+        return;
+      }
+      pushToast('success', `Welcome, ${found.name}`);
+      onLogin(found);
+    }, 600);
+  };
+
+  return (
+    <div className="min-h-screen flex bg-gradient-to-br from-uinr-dark via-uinr to-uinr-light">
+      <div className="hidden lg:flex flex-1 items-center justify-center text-white p-12">
+        <div className="max-w-md">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="bg-white/15 backdrop-blur p-3 rounded-xl"><Shield size={32} /></div>
+            <div>
+              <div className="text-2xl font-bold tracking-tight">UINR</div>
+              <div className="text-white/70 text-sm">Uganda Integrated National Registry</div>
+            </div>
+          </div>
+          <h1 className="text-4xl font-bold mb-4 leading-tight">One Citizen. One Record. One Nation.</h1>
+          <p className="text-white/80 leading-relaxed">
+            UINR unifies education, health, and family records of every Ugandan citizen behind a single
+            National Identification Number — empowering Ministries to plan, deliver, and govern with evidence.
+          </p>
+          <div className="mt-10 grid grid-cols-3 gap-4 text-center">
+            <div className="bg-white/10 rounded-lg p-4">
+              <div className="text-2xl font-bold">8.4M</div>
+              <div className="text-xs text-white/70">Students</div>
+            </div>
+            <div className="bg-white/10 rounded-lg p-4">
+              <div className="text-2xl font-bold">3,260</div>
+              <div className="text-xs text-white/70">Health Facilities</div>
+            </div>
+            <div className="bg-white/10 rounded-lg p-4">
+              <div className="text-2xl font-bold">2.1M</div>
+              <div className="text-xs text-white/70">Families</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="flex-1 flex items-center justify-center p-6">
+        <form onSubmit={submit} className="w-full max-w-md bg-white rounded-2xl shadow-2xl p-8">
+          <div className="lg:hidden flex items-center gap-2 mb-6 text-uinr">
+            <Shield size={28} />
+            <div className="font-bold text-xl">UINR</div>
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-1">Sign in</h2>
+          <p className="text-slate-500 text-sm mb-6">Access the national registry admin portal</p>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-800 rounded-lg text-sm flex items-start gap-2">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <label className="block text-sm font-medium text-slate-700 mb-1">Username</label>
+          <input value={username} onChange={e=>setUsername(e.target.value)}
+                 className="w-full mb-4 px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-uinr"
+                 placeholder="e.g. admin" required />
+
+          <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+          <input type="password" value={password} onChange={e=>setPassword(e.target.value)}
+                 className="w-full mb-4 px-3 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-uinr"
+                 placeholder="••••••••" required />
+
+          <label className="block text-sm font-medium text-slate-700 mb-1">Role</label>
+          <select value={role} onChange={e=>setRole(e.target.value)}
+                  className="w-full mb-6 px-3 py-2.5 border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-uinr">
+            <option>Super Admin</option>
+            <option>Ministry Officer</option>
+            <option>District Registrar</option>
+          </select>
+
+          <button type="submit" disabled={loading}
+                  className="w-full bg-uinr text-white py-2.5 rounded-lg font-semibold hover:bg-uinr-dark flex items-center justify-center gap-2 disabled:opacity-60">
+            {loading ? <RefreshCcw size={18} className="animate-spin" /> : <LogIn size={18} />}
+            {loading ? 'Authenticating…' : 'Sign in'}
+          </button>
+
+          <div className="mt-6 p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600">
+            <div className="font-semibold text-slate-700 mb-1">Demo credentials</div>
+            <div>admin / uinr2024 / Super Admin</div>
+            <div>officer / uinr2024 / Ministry Officer</div>
+            <div>registrar / uinr2024 / District Registrar</div>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Sidebar
+   =========================================================== */
+function Sidebar({ section, setSection, user, onLogout, open, setOpen }) {
+  const items = [
+    { key:'overview',  label:'Overview',       Icon:LayoutDashboard },
+    { key:'students',  label:'Students',       Icon:GraduationCap },
+    { key:'hospitals', label:'Hospitals',      Icon:Hospital },
+    { key:'families',  label:'Family Trees',   Icon:Users2 },
+    { key:'audit',     label:'Audit Log',      Icon:FileClock },
+    { key:'roles',     label:'Roles & Access', Icon:KeyRound, superAdminOnly:true },
+    { key:'settings',  label:'Settings',       Icon:SettingsIcon }
+  ];
+  const visible = items.filter(i => !i.superAdminOnly || user.role === 'Super Admin');
+
+  return (
+    <>
+      {open && <div className="fixed inset-0 bg-black/40 z-30 lg:hidden" onClick={()=>setOpen(false)} />}
+      <aside className={`fixed lg:static z-40 inset-y-0 left-0 w-64 bg-uinr text-white flex flex-col transition-transform ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+        <div className="px-5 py-5 border-b border-white/10 flex items-center gap-3">
+          <div className="bg-white/15 p-2 rounded-lg"><Shield size={22} /></div>
+          <div>
+            <div className="font-bold tracking-tight">UINR</div>
+            <div className="text-xs text-white/70">National Registry</div>
+          </div>
+        </div>
+        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+          {visible.map(({key,label,Icon}) => (
+            <button key={key}
+              onClick={() => { setSection(key); setOpen(false); }}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
+                section === key ? 'bg-white text-uinr shadow' : 'text-white/85 hover:bg-white/10'
+              }`}>
+              <Icon size={18} />
+              {label}
+            </button>
+          ))}
+        </nav>
+        <div className="p-3 border-t border-white/10">
+          <div className="px-3 py-2 text-xs text-white/70 mb-1">Signed in as</div>
+          <div className="px-3 mb-3">
+            <div className="font-semibold">{user.name}</div>
+            <div className="text-xs text-white/70">{user.role} · {user.district}</div>
+          </div>
+          <button onClick={onLogout}
+            className="w-full flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-sm py-2 rounded-lg">
+            <LogOut size={16} /> Sign out
+          </button>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+/* ===========================================================
+   Top bar
+   =========================================================== */
+function Topbar({ title, subtitle, onMenu, user }) {
+  return (
+    <div className="bg-white border-b border-slate-200 sticky top-0 z-20">
+      <div className="px-4 lg:px-8 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <button onClick={onMenu} className="lg:hidden p-2 hover:bg-slate-100 rounded-lg"><Menu size={20} /></button>
+          <div>
+            <div className="text-lg font-bold text-slate-900 leading-tight">{title}</div>
+            <div className="text-xs text-slate-500">{subtitle}</div>
+          </div>
+        </div>
+        <div className="hidden sm:flex items-center gap-3">
+          <Badge kind="blue"><span className="px-1">{user.role}</span></Badge>
+          <div className="text-right">
+            <div className="text-sm font-medium text-slate-800">{user.name}</div>
+            <div className="text-xs text-slate-500 flex items-center gap-1 justify-end"><MapPin size={12} />{user.district}</div>
+          </div>
+          <div className="w-9 h-9 bg-uinr text-white rounded-full flex items-center justify-center font-semibold">
+            {user.name.split(' ').map(s=>s[0]).slice(0,2).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Dashboard chart primitives (inline SVG)
+   =========================================================== */
+function AreaChart({ data, color='#1a3a5c', height=180 }) {
+  const w = 480;
+  const max = Math.max(...data.map(d=>d.y), 1);
+  const padX = 36, padTop = 24, padBot = 26;
+  const innerW = w - padX*2, innerH = height - padTop - padBot;
+  const stepX = data.length > 1 ? innerW / (data.length - 1) : innerW;
+  const pts = data.map((d, i) => ({
+    x: padX + i*stepX,
+    y: padTop + innerH - (d.y/max)*innerH
+  }));
+  const line = pts.map((p, i) => `${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const area = pts.length ? `${line} L${pts[pts.length-1].x},${padTop+innerH} L${pts[0].x},${padTop+innerH} Z` : '';
+  const gid = useMemo(() => 'g-' + Math.random().toString(36).slice(2, 8), []);
+  return (
+    <svg viewBox={`0 0 ${w} ${height}`} className="w-full">
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"  stopColor={color} stopOpacity="0.32" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      {[0,0.25,0.5,0.75,1].map((t,i) => (
+        <line key={i} x1={padX} y1={padTop+innerH*t} x2={w-padX} y2={padTop+innerH*t} stroke="#e2e8f0" strokeDasharray="3,4" />
+      ))}
+      <path d={area} fill={`url(#${gid})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+      {pts.map((p, i) => (
+        <g key={i}>
+          <circle cx={p.x} cy={p.y} r="4" fill="white" stroke={color} strokeWidth="2" />
+          <text x={p.x} y={height-8} textAnchor="middle" fontSize="11" fill="#64748b">{data[i].x}</text>
+          <text x={p.x} y={p.y-10} textAnchor="middle" fontSize="11" fontWeight="700" fill={color}>{data[i].y}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+function HBarChart({ data, color='#1a3a5c', valueSuffix='' }) {
+  const max = Math.max(...data.map(d=>d.value), 1);
+  return (
+    <div className="space-y-2.5">
+      {data.map(d => (
+        <div key={d.label}>
+          <div className="flex justify-between text-xs mb-1">
+            <span className="font-medium text-slate-700">{d.label}</span>
+            <span className="text-slate-500 font-semibold">{d.value}{valueSuffix}</span>
+          </div>
+          <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+            <div className="h-full rounded-full transition-all" style={{ width:`${(d.value/max)*100}%`, background: typeof color==='function' ? color(d) : color }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Donut({ data, size=170 }) {
+  const total = data.reduce((a,b)=>a+b.value, 0);
+  const r = 62, cx = size/2, cy = size/2;
+  let acc = 0;
+  const segs = total === 0 ? [] : data.map(d => {
+    const start = (acc/total) * 2*Math.PI - Math.PI/2;
+    acc += d.value;
+    const end = (acc/total) * 2*Math.PI - Math.PI/2;
+    const large = end - start > Math.PI ? 1 : 0;
+    const x1 = cx + r*Math.cos(start), y1 = cy + r*Math.sin(start);
+    const x2 = cx + r*Math.cos(end),   y2 = cy + r*Math.sin(end);
+    return { path:`M${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r} 0 ${large} 1 ${x2.toFixed(2)},${y2.toFixed(2)}`, ...d };
+  });
+  return (
+    <div className="flex items-center gap-5">
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} className="shrink-0">
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#f1f5f9" strokeWidth="22" />
+        {segs.map((s,i)=> <path key={i} d={s.path} stroke={s.color} strokeWidth="22" fill="none" strokeLinecap="butt" />)}
+        <text x={cx} y={cy-4} textAnchor="middle" fontSize="22" fontWeight="700" fill="#1a3a5c">{total}</text>
+        <text x={cx} y={cy+14} textAnchor="middle" fontSize="9" fill="#64748b" letterSpacing="1">FACILITIES</text>
+      </svg>
+      <ul className="space-y-2 text-sm flex-1">
+        {data.map(d => (
+          <li key={d.label} className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-sm" style={{background:d.color}} />
+              <span className="font-medium text-slate-700">{d.label}</span>
+            </span>
+            <span className="text-slate-500 font-semibold">{d.value}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/* ===========================================================
+   KPI tile
+   =========================================================== */
+function KpiCard({ label, value, trend, sub, Icon, color, onClick }) {
+  const palette = {
+    sky:    { wrap:'bg-sky-50 border-sky-200 text-sky-700' },
+    emerald:{ wrap:'bg-emerald-50 border-emerald-200 text-emerald-700' },
+    indigo: { wrap:'bg-indigo-50 border-indigo-200 text-indigo-700' },
+    violet: { wrap:'bg-violet-50 border-violet-200 text-violet-700' },
+    amber:  { wrap:'bg-amber-50 border-amber-200 text-amber-700' },
+    rose:   { wrap:'bg-rose-50 border-rose-200 text-rose-700' }
+  }[color] || { wrap:'bg-slate-50 border-slate-200 text-slate-700' };
+  const up = trend >= 0;
+  return (
+    <button onClick={onClick} className="text-left bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md hover:border-uinr/40 transition w-full">
+      <div className="flex items-start justify-between mb-3">
+        <div className={`p-2 rounded-lg border ${palette.wrap}`}><Icon size={18} /></div>
+        <div className={`flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${up ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+          {up ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+          {up ? '+' : ''}{trend.toFixed(1)}%
+        </div>
+      </div>
+      <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">{label}</div>
+      <div className="text-2xl font-bold text-slate-900 mt-1">{value}</div>
+      <div className="text-xs text-slate-500 mt-1">{sub}</div>
+    </button>
+  );
+}
+
+/* ===========================================================
+   Overview page (Admin dashboard)
+   =========================================================== */
+function Overview({ students, hospitals, families, audit, sync, user, setSection }) {
+  const enrolled  = students.filter(s => s.status === 'Enrolled').length;
+  const dropouts  = students.filter(s => s.status === 'Dropped Out').length;
+  const graduated = students.filter(s => s.status === 'Graduated').length;
+  const critical  = hospitals.filter(h => h.stock === 'Critical').length;
+  const lowStock  = hospitals.filter(h => h.stock === 'Low').length;
+  const totalBeds = hospitals.reduce((a,h) => a + h.beds, 0);
+  const totalVisits = hospitals.reduce((a,h) => a + h.visits, 0);
+  const citizens  = families.reduce((a,f) => a + f.members, 0);
+  const editsThisWeek = audit.filter(a => ['Edited','Created','Deleted'].includes(a.action)).length;
+  const syncingCount  = sync.filter(s => s.status === 'Syncing').length;
+  const alertsCount   = critical + dropouts + syncingCount;
+
+  // Enrolment trend by year
+  const yearGroups = {};
+  students.forEach(s => { yearGroups[s.enrolmentYear] = (yearGroups[s.enrolmentYear] || 0) + 1; });
+  const enrolmentSeries = Object.keys(yearGroups).sort().map(y => ({ x: y, y: yearGroups[y] }));
+
+  // Students per district
+  const distGroups = {};
+  students.forEach(s => { distGroups[s.district] = (distGroups[s.district] || 0) + 1; });
+  const studentsByDistrict = Object.entries(distGroups).sort((a,b) => b[1]-a[1]).map(([label,value]) => ({ label, value }));
+
+  // Vaccination coverage per district
+  const vacAcc = {};
+  hospitals.forEach(h => {
+    if (!vacAcc[h.district]) vacAcc[h.district] = { sum:0, n:0 };
+    vacAcc[h.district].sum += h.vacCoverage;
+    vacAcc[h.district].n   += 1;
+  });
+  const vacByDistrict = Object.entries(vacAcc).map(([label,v]) => ({ label, value: Math.round(v.sum/v.n) })).sort((a,b)=>b.value-a.value);
+  const vacColor = (d) => d.value >= 85 ? '#10b981' : d.value >= 75 ? '#f59e0b' : '#ef4444';
+
+  // Drug stock donut
+  const stockCounts = { Adequate:0, Low:0, Critical:0 };
+  hospitals.forEach(h => stockCounts[h.stock]++);
+  const stockDonut = [
+    { label:'Adequate', value:stockCounts.Adequate, color:'#10b981' },
+    { label:'Low',      value:stockCounts.Low,      color:'#f59e0b' },
+    { label:'Critical', value:stockCounts.Critical, color:'#ef4444' }
+  ];
+
+  // Top schools and facilities
+  const schoolCounts = {};
+  students.filter(s=>s.status==='Enrolled').forEach(s => { schoolCounts[s.school] = (schoolCounts[s.school]||0) + 1; });
+  const topSchools = Object.entries(schoolCounts).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([name,count])=>({name, count}));
+  const topFacilities = [...hospitals].sort((a,b)=>b.visits - a.visits).slice(0,5);
+
+  // Alerts
+  const alerts = [
+    ...hospitals.filter(h=>h.stock==='Critical').map(h => ({
+      kind:'critical', Icon:Syringe, title:`Critical drug stock — ${h.name}`, detail:`${h.district} · ${h.inCharge}`, target:'hospitals'
+    })),
+    ...sync.filter(s=>s.status==='Syncing').map(s => ({
+      kind:'warn', Icon:RefreshCcw, title:`${s.district} sync in progress`, detail:`Last sync ${s.lastSync}`, target:'overview'
+    })),
+    ...students.filter(s=>s.status==='Dropped Out').map(s => ({
+      kind:'warn', Icon:GraduationCap, title:`Dropout reported — ${s.name}`, detail:`${s.school}, ${s.district}`, target:'students'
+    }))
+  ];
+
+  const recent = audit.slice(0, 6).map(a => ({
+    ...a, status: ['Edited','Created'].includes(a.action) ? 'Approved' : 'Pending'
+  }));
+
+  const kpis = [
+    { label:'Students Enrolled',  value:enrolled.toLocaleString(),  trend:8.2,  sub:`${students.length} records · ${graduated} graduated`, Icon:GraduationCap, color:'sky',     target:'students'  },
+    { label:'Health Facilities',  value:hospitals.length.toLocaleString(), trend:1.4, sub:`${totalBeds.toLocaleString()} beds · ${critical} critical`, Icon:Hospital, color:'emerald', target:'hospitals' },
+    { label:'Families Registered',value:families.length.toLocaleString(), trend:4.6, sub:`${citizens} citizens linked`, Icon:Users2, color:'indigo', target:'families' },
+    { label:'Citizens Linked',    value:citizens.toLocaleString(), trend:6.1,  sub:'multi-generational records', Icon:Sparkles, color:'violet', target:'families' },
+    { label:'Edits This Week',    value:editsThisWeek.toLocaleString(), trend:12.0, sub:`${audit.length} audit entries`, Icon:Activity, color:'amber', target:'audit' },
+    { label:'Open Alerts',        value:alertsCount.toLocaleString(), trend:-3.1, sub:`${critical} critical · ${dropouts} dropouts`, Icon:BellRing, color:'rose', target:'overview' }
+  ];
+
+  const quickActions = [
+    { label:'Students',  Icon:GraduationCap, target:'students'  },
+    { label:'Hospitals', Icon:Hospital,      target:'hospitals' },
+    { label:'Families',  Icon:Users2,        target:'families'  },
+    { label:'Audit Log', Icon:FileClock,     target:'audit'     }
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Hero banner */}
+      <div className="bg-gradient-to-r from-uinr-dark via-uinr to-uinr-light text-white rounded-2xl p-6 shadow-lg flex flex-col lg:flex-row lg:items-center gap-5">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 text-white/70 text-xs uppercase tracking-wider"><Globe2 size={14} /> National overview</div>
+          <h2 className="text-2xl font-bold mt-1">Good day, {user.name.split(' ')[0]}.</h2>
+          <p className="text-white/80 text-sm mt-1">
+            {enrolled.toLocaleString()} students enrolled across {Object.keys(distGroups).length} districts ·
+            {' '}{totalVisits.toLocaleString()} patient visits this period ·
+            {' '}<span className="text-amber-200 font-semibold">{alertsCount} open alerts</span>
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {quickActions.map(a => (
+            <button key={a.target} onClick={()=>setSection(a.target)}
+              className="flex items-center gap-2 bg-white/10 hover:bg-white/20 backdrop-blur px-3.5 py-2 rounded-lg text-sm font-medium transition">
+              <a.Icon size={16} /> {a.label} <ArrowRight size={14} className="opacity-70" />
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* KPI grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        {kpis.map((k, i) => (
+          <KpiCard key={i} {...k} onClick={()=>setSection(k.target)} />
+        ))}
+      </div>
+
+      {/* Charts row 1 */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <BarChart3 size={18} className="text-uinr" />
+              <div>
+                <div className="font-semibold text-slate-900">Enrolment trend</div>
+                <div className="text-xs text-slate-500">Students by enrolment year</div>
+              </div>
+            </div>
+            <Badge kind="blue">Education</Badge>
+          </div>
+          <div className="p-5">
+            {enrolmentSeries.length > 0
+              ? <AreaChart data={enrolmentSeries} color="#1a3a5c" />
+              : <div className="text-sm text-slate-500 py-10 text-center">No enrolment data.</div>}
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <MapPin size={18} className="text-uinr" />
+              <div>
+                <div className="font-semibold text-slate-900">Students by district</div>
+                <div className="text-xs text-slate-500">Top {studentsByDistrict.length} districts</div>
+              </div>
+            </div>
+          </div>
+          <div className="p-5">
+            <HBarChart data={studentsByDistrict} color="#1a3a5c" />
+          </div>
+        </div>
+      </div>
+
+      {/* Charts row 2 */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Syringe size={18} className="text-emerald-600" />
+              <div>
+                <div className="font-semibold text-slate-900">Vaccination coverage by district</div>
+                <div className="text-xs text-slate-500">Average across reporting facilities</div>
+              </div>
+            </div>
+            <Badge kind="green">Health</Badge>
+          </div>
+          <div className="p-5">
+            <HBarChart data={vacByDistrict} color={vacColor} valueSuffix="%" />
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
+            <Stethoscope size={18} className="text-uinr" />
+            <div>
+              <div className="font-semibold text-slate-900">Drug stock distribution</div>
+              <div className="text-xs text-slate-500">Across {hospitals.length} facilities</div>
+            </div>
+          </div>
+          <div className="p-5">
+            <Donut data={stockDonut} />
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom row */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <div>
+              <div className="font-semibold text-slate-900">Recent Record Edits</div>
+              <div className="text-xs text-slate-500">Latest changes across the system</div>
+            </div>
+            <button onClick={()=>setSection('audit')} className="text-xs font-semibold text-uinr hover:underline flex items-center gap-1">
+              Full audit log <ArrowRight size={12} />
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  <th className="text-left px-5 py-2.5 font-medium">Name</th>
+                  <th className="text-left px-5 py-2.5 font-medium">Module</th>
+                  <th className="text-left px-5 py-2.5 font-medium">District</th>
+                  <th className="text-left px-5 py-2.5 font-medium">Edited By</th>
+                  <th className="text-left px-5 py-2.5 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recent.map(r => (
+                  <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
+                    <td className="px-5 py-2.5 font-medium text-slate-800">{r.record}</td>
+                    <td className="px-5 py-2.5 text-slate-600">{r.module}</td>
+                    <td className="px-5 py-2.5 text-slate-600">{r.district}</td>
+                    <td className="px-5 py-2.5 text-slate-600">{r.by}</td>
+                    <td className="px-5 py-2.5"><Badge kind={statusKind(r.status)}>{r.status}</Badge></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <BellRing size={18} className="text-rose-600" />
+              <div>
+                <div className="font-semibold text-slate-900">Critical alerts</div>
+                <div className="text-xs text-slate-500">{alerts.length} open</div>
+              </div>
+            </div>
+          </div>
+          <ul className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
+            {alerts.length === 0 && (
+              <li className="px-5 py-8 text-center text-sm text-slate-500 flex flex-col items-center gap-2">
+                <CheckCircle2 size={28} className="text-emerald-500" /> All clear nationally.
+              </li>
+            )}
+            {alerts.slice(0, 8).map((a, i) => {
+              const Icon = a.Icon;
+              return (
+                <li key={i} className="px-5 py-3 flex items-start gap-3 hover:bg-slate-50 cursor-pointer" onClick={()=>setSection(a.target)}>
+                  <div className={`p-1.5 rounded-lg ${a.kind === 'critical' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                    <Icon size={14} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-slate-800 truncate">{a.title}</div>
+                    <div className="text-xs text-slate-500 truncate">{a.detail}</div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      </div>
+
+      {/* Top schools / facilities / sync row */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
+            <School size={18} className="text-uinr" />
+            <div>
+              <div className="font-semibold text-slate-900">Top schools by enrolment</div>
+              <div className="text-xs text-slate-500">Active students</div>
+            </div>
+          </div>
+          <ul className="divide-y divide-slate-100">
+            {topSchools.map((s, i) => (
+              <li key={s.name} className="px-5 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-6 h-6 rounded-full bg-uinr/10 text-uinr text-xs font-bold flex items-center justify-center">{i+1}</div>
+                  <div className="text-sm font-medium text-slate-800">{s.name}</div>
+                </div>
+                <Badge kind="blue">{s.count}</Badge>
+              </li>
+            ))}
+            {topSchools.length === 0 && <li className="px-5 py-6 text-center text-sm text-slate-500">No data.</li>}
+          </ul>
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
+            <Building2 size={18} className="text-emerald-600" />
+            <div>
+              <div className="font-semibold text-slate-900">Busiest facilities</div>
+              <div className="text-xs text-slate-500">Recent patient visits</div>
+            </div>
+          </div>
+          <ul className="divide-y divide-slate-100">
+            {topFacilities.map((h, i) => (
+              <li key={h.id} className="px-5 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold flex items-center justify-center shrink-0">{i+1}</div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-slate-800 truncate">{h.name}</div>
+                    <div className="text-xs text-slate-500">{h.district}</div>
+                  </div>
+                </div>
+                <div className="text-sm font-bold text-uinr ml-2">{h.visits.toLocaleString()}</div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <div>
+              <div className="font-semibold text-slate-900">District Sync Status</div>
+              <div className="text-xs text-slate-500">{sync.length} districts · {syncingCount} syncing</div>
+            </div>
+            <RefreshCcw size={16} className={`text-slate-400 ${syncingCount > 0 ? 'animate-spin' : ''}`} />
+          </div>
+          <ul className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
+            {sync.map(s => (
+              <li key={s.district} className="px-5 py-2.5 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium text-slate-800">{s.district}</div>
+                  <div className="text-xs text-slate-500">Last sync {s.lastSync}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`w-2.5 h-2.5 rounded-full ${s.status==='Synced' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
+                  <span className={`text-xs font-semibold ${s.status==='Synced' ? 'text-emerald-700' : 'text-amber-700'}`}>{s.status}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Confirm dialog
+   =========================================================== */
+function Confirm({ open, title, message, onConfirm, onClose, danger=true }) {
+  return (
+    <Modal open={open} onClose={onClose} title={title}
+      footer={<>
+        <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Cancel</button>
+        <button onClick={onConfirm} className={`px-4 py-2 rounded-lg text-white ${danger ? 'bg-red-600 hover:bg-red-700' : 'bg-uinr hover:bg-uinr-dark'}`}>Confirm</button>
+      </>}>
+      <p className="text-slate-700">{message}</p>
+    </Modal>
+  );
+}
+
+/* ===========================================================
+   Student form
+   =========================================================== */
+function StudentForm({ initial, onSave, onClose, user }) {
+  const [f, setF] = useState(initial || {
+    name:'', nin:'', school:'', district: user.role==='District Registrar' ? user.district : 'Kampala',
+    level:'S1', enrolmentYear: 2026, unebResults:'—', status:'Enrolled', guardianNin:''
+  });
+  const update = (k, v) => setF(s => ({ ...s, [k]: v }));
+  const submit = (e) => { e.preventDefault(); onSave(f); };
+  const lockedDistrict = user.role === 'District Registrar';
+
+  return (
+    <form onSubmit={submit} id="student-form" className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <Field label="Full Name"><input className={inputCls} value={f.name} onChange={e=>update('name', e.target.value)} required /></Field>
+      <Field label="NIN"><input className={inputCls} value={f.nin} onChange={e=>update('nin', e.target.value)} required /></Field>
+      <Field label="School"><input className={inputCls} value={f.school} onChange={e=>update('school', e.target.value)} required /></Field>
+      <Field label="District">
+        <select className={inputCls} value={f.district} onChange={e=>update('district', e.target.value)} disabled={lockedDistrict}>
+          {DISTRICTS.map(d => <option key={d}>{d}</option>)}
+        </select>
+      </Field>
+      <Field label="Level">
+        <select className={inputCls} value={f.level} onChange={e=>update('level', e.target.value)}>
+          {LEVELS.map(l => <option key={l}>{l}</option>)}
+        </select>
+      </Field>
+      <Field label="Enrolment Year">
+        <input className={inputCls} type="number" value={f.enrolmentYear} onChange={e=>update('enrolmentYear', Number(e.target.value))} min={2000} max={2030} required />
+      </Field>
+      <Field label="UNEB Results"><input className={inputCls} value={f.unebResults} onChange={e=>update('unebResults', e.target.value)} /></Field>
+      <Field label="Status">
+        <select className={inputCls} value={f.status} onChange={e=>update('status', e.target.value)}>
+          {STUDENT_STATUSES.map(s => <option key={s}>{s}</option>)}
+        </select>
+      </Field>
+      <Field label="Guardian NIN"><input className={inputCls} value={f.guardianNin} onChange={e=>update('guardianNin', e.target.value)} /></Field>
+    </form>
+  );
+}
+
+/* ===========================================================
+   Hospital form
+   =========================================================== */
+function HospitalForm({ initial, onSave, onClose, user }) {
+  const [f, setF] = useState(initial || {
+    name:'', level:'HC III', district: user.role==='District Registrar' ? user.district : 'Kampala',
+    inCharge:'', beds:50, stock:'Adequate', lastInspection:'2026-06-01', visits:0, vacCoverage:80
+  });
+  const update = (k, v) => setF(s => ({ ...s, [k]: v }));
+  const submit = (e) => { e.preventDefault(); onSave(f); };
+  const lockedDistrict = user.role === 'District Registrar';
+
+  return (
+    <form onSubmit={submit} id="hospital-form" className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <Field label="Facility Name"><input className={inputCls} value={f.name} onChange={e=>update('name', e.target.value)} required /></Field>
+      <Field label="Level">
+        <select className={inputCls} value={f.level} onChange={e=>update('level', e.target.value)}>
+          {FACILITY_LEVELS.map(l => <option key={l}>{l}</option>)}
+        </select>
+      </Field>
+      <Field label="District">
+        <select className={inputCls} value={f.district} onChange={e=>update('district', e.target.value)} disabled={lockedDistrict}>
+          {DISTRICTS.map(d => <option key={d}>{d}</option>)}
+        </select>
+      </Field>
+      <Field label="In-charge Name"><input className={inputCls} value={f.inCharge} onChange={e=>update('inCharge', e.target.value)} required /></Field>
+      <Field label="Bed Capacity"><input type="number" className={inputCls} value={f.beds} onChange={e=>update('beds', Number(e.target.value))} required /></Field>
+      <Field label="Drug Stock Status">
+        <select className={inputCls} value={f.stock} onChange={e=>update('stock', e.target.value)}>
+          {STOCK_STATUSES.map(s => <option key={s}>{s}</option>)}
+        </select>
+      </Field>
+      <Field label="Last Inspection"><input type="date" className={inputCls} value={f.lastInspection} onChange={e=>update('lastInspection', e.target.value)} /></Field>
+      <Field label="Patient Visits (recent)"><input type="number" className={inputCls} value={f.visits} onChange={e=>update('visits', Number(e.target.value))} /></Field>
+      <Field label="Vaccination Coverage (%)"><input type="number" min="0" max="100" className={inputCls} value={f.vacCoverage} onChange={e=>update('vacCoverage', Number(e.target.value))} /></Field>
+    </form>
+  );
+}
+
+/* ===========================================================
+   Family form
+   =========================================================== */
+function FamilyForm({ initial, onSave, onClose, user }) {
+  const [f, setF] = useState(initial || {
+    head:'', nin:'', clan:CLANS[0], tribe:TRIBES[0], village:'',
+    district: user.role==='District Registrar' ? user.district : 'Kampala',
+    members:1, marriage:'Monogamous',
+    tree:{ grandparents:[], parents:[], children:[] }
+  });
+  const update = (k, v) => setF(s => ({ ...s, [k]: v }));
+  const lockedDistrict = user.role === 'District Registrar';
+  const submit = (e) => { e.preventDefault(); onSave(f); };
+
+  return (
+    <form onSubmit={submit} id="family-form" className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <Field label="Family Head Name"><input className={inputCls} value={f.head} onChange={e=>update('head', e.target.value)} required /></Field>
+      <Field label="NIN"><input className={inputCls} value={f.nin} onChange={e=>update('nin', e.target.value)} required /></Field>
+      <Field label="Clan">
+        <select className={inputCls} value={f.clan} onChange={e=>update('clan', e.target.value)}>
+          {CLANS.map(c => <option key={c}>{c}</option>)}
+        </select>
+      </Field>
+      <Field label="Tribe">
+        <select className={inputCls} value={f.tribe} onChange={e=>update('tribe', e.target.value)}>
+          {TRIBES.map(t => <option key={t}>{t}</option>)}
+        </select>
+      </Field>
+      <Field label="Village"><input className={inputCls} value={f.village} onChange={e=>update('village', e.target.value)} required /></Field>
+      <Field label="District">
+        <select className={inputCls} value={f.district} onChange={e=>update('district', e.target.value)} disabled={lockedDistrict}>
+          {DISTRICTS.map(d => <option key={d}>{d}</option>)}
+        </select>
+      </Field>
+      <Field label="Number of Members"><input type="number" min="1" className={inputCls} value={f.members} onChange={e=>update('members', Number(e.target.value))} /></Field>
+      <Field label="Marriage Status">
+        <select className={inputCls} value={f.marriage} onChange={e=>update('marriage', e.target.value)}>
+          <option>Monogamous</option><option>Polygamous</option><option>Single</option><option>Widowed</option><option>Divorced</option>
+        </select>
+      </Field>
+    </form>
+  );
+}
+
+/* ===========================================================
+   User form
+   =========================================================== */
+function UserForm({ initial, onSave }) {
+  const [f, setF] = useState(initial || { name:'', username:'', role:'District Registrar', district:'Kampala', status:'Active' });
+  const update = (k, v) => setF(s => ({ ...s, [k]: v }));
+  const submit = (e) => { e.preventDefault(); onSave(f); };
+  return (
+    <form onSubmit={submit} id="user-form" className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <Field label="Full Name"><input className={inputCls} value={f.name} onChange={e=>update('name', e.target.value)} required /></Field>
+      <Field label="Username"><input className={inputCls} value={f.username} onChange={e=>update('username', e.target.value)} required /></Field>
+      <Field label="Role">
+        <select className={inputCls} value={f.role} onChange={e=>update('role', e.target.value)}>
+          <option>Super Admin</option><option>Ministry Officer</option><option>District Registrar</option>
+        </select>
+      </Field>
+      <Field label="District Assigned">
+        <select className={inputCls} value={f.district} onChange={e=>update('district', e.target.value)}>
+          {DISTRICTS.map(d => <option key={d}>{d}</option>)}
+        </select>
+      </Field>
+      <Field label="Status">
+        <select className={inputCls} value={f.status} onChange={e=>update('status', e.target.value)}>
+          <option>Active</option><option>Suspended</option>
+        </select>
+      </Field>
+    </form>
+  );
+}
+
+const inputCls = 'w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-uinr text-sm';
+function Field({ label, children }) {
+  return (
+    <label className="block">
+      <span className="block text-xs font-semibold text-slate-600 mb-1">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+/* ===========================================================
+   Permissions helper
+   =========================================================== */
+function permissions(user) {
+  return {
+    canEdit:   user.role !== 'Ministry Officer',
+    canDelete: user.role === 'Super Admin',
+    canCreate: user.role !== 'Ministry Officer',
+    scopeDistrict: user.role === 'District Registrar' ? user.district : null
+  };
+}
+
+/* ===========================================================
+   Students page
+   =========================================================== */
+function StudentsPage({ students, dispatch, user, pushToast, audit, addAudit }) {
+  const perms = permissions(user);
+  const scoped = perms.scopeDistrict ? students.filter(s => s.district === perms.scopeDistrict) : students;
+
+  const [q, setQ] = useState('');
+  const [fDist, setFDist] = useState('All');
+  const [fLevel, setFLevel] = useState('All');
+  const [editing, setEditing] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(null);
+
+  const filtered = scoped.filter(s =>
+    (q === '' || s.name.toLowerCase().includes(q.toLowerCase()) || s.nin.toLowerCase().includes(q.toLowerCase())) &&
+    (fDist === 'All' || s.district === fDist) &&
+    (fLevel === 'All' || s.level === fLevel)
+  );
+  const { sorted, headerClick, SortIcon } = useSorted(filtered, 'name');
+
+  const handleSave = (rec) => {
+    if (rec.id) {
+      dispatch({ type:'STUDENT_UPDATE', payload: rec });
+      addAudit('Edited', 'Students', rec.name, user);
+      pushToast('success', `Saved ${rec.name}`);
+    } else {
+      const id = Math.max(0, ...students.map(s=>s.id)) + 1;
+      dispatch({ type:'STUDENT_ADD', payload: { ...rec, id } });
+      addAudit('Created', 'Students', rec.name, user);
+      pushToast('success', `Added ${rec.name}`);
+    }
+    setEditing(null); setAdding(false);
+  };
+
+  const handleDelete = () => {
+    const r = confirmDel;
+    dispatch({ type:'STUDENT_DELETE', payload: r.id });
+    addAudit('Deleted', 'Students', r.name, user);
+    pushToast('success', `Deleted ${r.name}`);
+    setConfirmDel(null);
+  };
+
+  const doExport = () => {
+    exportCSV('students.csv', sorted, [
+      { key:'name', label:'Name' }, { key:'nin', label:'NIN' }, { key:'school', label:'School' },
+      { key:'district', label:'District' }, { key:'level', label:'Level' },
+      { key:'enrolmentYear', label:'Enrolment Year' }, { key:'unebResults', label:'UNEB Results' },
+      { key:'status', label:'Status' }, { key:'guardianNin', label:'Guardian NIN' }
+    ]);
+    pushToast('success', 'Exported students.csv');
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name or NIN…"
+                 className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-uinr" />
+        </div>
+        <div className="flex items-center gap-2 text-sm">
+          <Filter size={16} className="text-slate-400" />
+          <select className={inputCls + ' w-auto'} value={fDist} onChange={e=>setFDist(e.target.value)} disabled={!!perms.scopeDistrict}>
+            <option>All</option>
+            {DISTRICTS.map(d => <option key={d}>{d}</option>)}
+          </select>
+          <select className={inputCls + ' w-auto'} value={fLevel} onChange={e=>setFLevel(e.target.value)}>
+            <option>All</option>
+            {LEVELS.map(l => <option key={l}>{l}</option>)}
+          </select>
+        </div>
+        <div className="ml-auto flex gap-2">
+          <button onClick={doExport} className="flex items-center gap-2 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
+            <Download size={16} /> Export CSV
+          </button>
+          <button disabled={!perms.canCreate} onClick={()=>setAdding(true)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${perms.canCreate ? 'bg-uinr hover:bg-uinr-dark' : 'bg-slate-300 cursor-not-allowed'}`}>
+            <Plus size={16} /> Add Student
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                {[
+                  ['name','Name'],['nin','NIN'],['school','School'],['district','District'],
+                  ['level','Level'],['enrolmentYear','Year'],['unebResults','UNEB'],['status','Status'],['guardianNin','Guardian NIN']
+                ].map(([k,l]) => (
+                  <th key={k} onClick={()=>headerClick(k)} className="text-left px-4 py-2.5 font-medium cursor-pointer select-none whitespace-nowrap">
+                    {l} <SortIcon k={k} />
+                  </th>
+                ))}
+                <th className="px-4 py-2.5 text-right font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.length === 0 && (
+                <tr><td colSpan="10" className="text-center py-8 text-slate-500">No students match your filters.</td></tr>
+              )}
+              {sorted.map(s => (
+                <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(s)}>
+                  <td className="px-4 py-2.5 font-medium text-slate-800">{s.name}</td>
+                  <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{s.nin}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{s.school}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{s.district}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{s.level}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{s.enrolmentYear}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{s.unebResults}</td>
+                  <td className="px-4 py-2.5"><Badge kind={statusKind(s.status)}>{s.status}</Badge></td>
+                  <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{s.guardianNin}</td>
+                  <td className="px-4 py-2.5 text-right" onClick={e=>e.stopPropagation()}>
+                    <button onClick={()=>setEditing(s)} disabled={!perms.canEdit}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${perms.canEdit ? 'text-uinr hover:bg-sky-50' : 'text-slate-400 cursor-not-allowed'}`}>
+                      <Pencil size={14} /> Edit
+                    </button>
+                    <button onClick={()=>setConfirmDel(s)} disabled={!perms.canDelete}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ml-1 ${perms.canDelete ? 'text-red-600 hover:bg-red-50' : 'text-slate-400 cursor-not-allowed'}`}>
+                      <Trash2 size={14} /> Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <Modal open={!!editing} onClose={()=>setEditing(null)} title={editing ? `Edit Student — ${editing.name}` : ''}
+        footer={<>
+          <button onClick={()=>setEditing(null)} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Cancel</button>
+          <button form="student-form" type="submit" disabled={!perms.canEdit}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-white ${perms.canEdit ? 'bg-uinr hover:bg-uinr-dark' : 'bg-slate-300 cursor-not-allowed'}`}>
+            <Save size={16} /> Save Changes
+          </button>
+        </>}>
+        {editing && <StudentForm initial={editing} onSave={handleSave} onClose={()=>setEditing(null)} user={user} />}
+      </Modal>
+
+      <Modal open={adding} onClose={()=>setAdding(false)} title="Add New Student"
+        footer={<>
+          <button onClick={()=>setAdding(false)} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Cancel</button>
+          <button form="student-form" type="submit" className="flex items-center gap-2 px-4 py-2 rounded-lg text-white bg-uinr hover:bg-uinr-dark">
+            <Plus size={16} /> Add Student
+          </button>
+        </>}>
+        <StudentForm onSave={handleSave} onClose={()=>setAdding(false)} user={user} />
+      </Modal>
+
+      <Confirm open={!!confirmDel} onClose={()=>setConfirmDel(null)} onConfirm={handleDelete}
+        title="Delete student record?" message={confirmDel ? `This will permanently remove ${confirmDel.name} (${confirmDel.nin}). This action is logged in the audit trail.` : ''} />
+    </div>
+  );
+}
+
+/* ===========================================================
+   Hospitals page
+   =========================================================== */
+function HospitalsPage({ hospitals, dispatch, user, pushToast, addAudit }) {
+  const perms = permissions(user);
+  const scoped = perms.scopeDistrict ? hospitals.filter(h => h.district === perms.scopeDistrict) : hospitals;
+
+  const [q, setQ] = useState('');
+  const [editing, setEditing] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(null);
+
+  const filtered = scoped.filter(h => q==='' || h.name.toLowerCase().includes(q.toLowerCase()) || h.district.toLowerCase().includes(q.toLowerCase()));
+  const { sorted, headerClick, SortIcon } = useSorted(filtered, 'name');
+
+  const handleSave = (rec) => {
+    if (rec.id) { dispatch({ type:'HOSP_UPDATE', payload: rec }); addAudit('Edited', 'Hospitals', rec.name, user); pushToast('success', `Saved ${rec.name}`); }
+    else { const id = Math.max(0, ...hospitals.map(h=>h.id))+1; dispatch({ type:'HOSP_ADD', payload: {...rec, id} }); addAudit('Created', 'Hospitals', rec.name, user); pushToast('success', `Added ${rec.name}`); }
+    setEditing(null); setAdding(false);
+  };
+
+  const handleDelete = () => {
+    const r = confirmDel;
+    dispatch({ type:'HOSP_DELETE', payload:r.id });
+    addAudit('Deleted', 'Hospitals', r.name, user);
+    pushToast('success', `Deleted ${r.name}`);
+    setConfirmDel(null);
+  };
+
+  const districtCoverage = useMemo(() => {
+    const byDist = {};
+    scoped.forEach(h => {
+      if (!byDist[h.district]) byDist[h.district] = { total: 0, sum: 0 };
+      byDist[h.district].total += 1;
+      byDist[h.district].sum += h.vacCoverage;
+    });
+    return Object.entries(byDist).map(([d, v]) => ({ district: d, pct: Math.round(v.sum / v.total) }));
+  }, [scoped]);
+
+  const doExport = () => {
+    exportCSV('hospitals.csv', sorted, [
+      { key:'name', label:'Facility' }, { key:'level', label:'Level' }, { key:'district', label:'District' },
+      { key:'inCharge', label:'In-charge' }, { key:'beds', label:'Beds' }, { key:'stock', label:'Stock' },
+      { key:'lastInspection', label:'Last Inspection' }, { key:'visits', label:'Visits' }, { key:'vacCoverage', label:'Vac Coverage %' }
+    ]);
+    pushToast('success', 'Exported hospitals.csv');
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search facilities…"
+                 className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-uinr" />
+        </div>
+        <div className="ml-auto flex gap-2">
+          <button onClick={doExport} className="flex items-center gap-2 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
+            <Download size={16} /> Export CSV
+          </button>
+          <button disabled={!perms.canCreate} onClick={()=>setAdding(true)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${perms.canCreate ? 'bg-uinr hover:bg-uinr-dark' : 'bg-slate-300 cursor-not-allowed'}`}>
+            <Plus size={16} /> Add Facility
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                {[['name','Facility'],['level','Level'],['district','District'],['inCharge','In-charge'],['beds','Beds'],['stock','Drug Stock'],['lastInspection','Last Inspection']].map(([k,l])=>(
+                  <th key={k} onClick={()=>headerClick(k)} className="text-left px-4 py-2.5 font-medium cursor-pointer whitespace-nowrap">{l} <SortIcon k={k} /></th>
+                ))}
+                <th className="text-right px-4 py-2.5 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.length === 0 && (
+                <tr><td colSpan="8" className="text-center py-8 text-slate-500">No facilities found.</td></tr>
+              )}
+              {sorted.map(h => (
+                <tr key={h.id} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(h)}>
+                  <td className="px-4 py-2.5 font-medium text-slate-800 flex items-center gap-2"><Building2 size={14} className="text-uinr" />{h.name}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{h.level}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{h.district}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{h.inCharge}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{h.beds}</td>
+                  <td className="px-4 py-2.5"><Badge kind={statusKind(h.stock)}>{h.stock}</Badge></td>
+                  <td className="px-4 py-2.5 text-slate-600">{h.lastInspection}</td>
+                  <td className="px-4 py-2.5 text-right" onClick={e=>e.stopPropagation()}>
+                    <button onClick={()=>setEditing(h)} disabled={!perms.canEdit}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${perms.canEdit ? 'text-uinr hover:bg-sky-50' : 'text-slate-400 cursor-not-allowed'}`}>
+                      <Pencil size={14} /> Edit
+                    </button>
+                    <button onClick={()=>setConfirmDel(h)} disabled={!perms.canDelete}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ml-1 ${perms.canDelete ? 'text-red-600 hover:bg-red-50' : 'text-slate-400 cursor-not-allowed'}`}>
+                      <Trash2 size={14} /> Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
+            <Activity size={18} className="text-uinr" />
+            <div>
+              <div className="font-semibold text-slate-900">Recent Patient Visits</div>
+              <div className="text-xs text-slate-500">Latest visit counts per facility</div>
+            </div>
+          </div>
+          <ul className="divide-y divide-slate-100">
+            {sorted.slice(0, 8).map(h => (
+              <li key={h.id} className="px-5 py-2.5 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-medium text-slate-800">{h.name}</div>
+                  <div className="text-xs text-slate-500">{h.district} · {h.level}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-lg font-bold text-uinr">{h.visits.toLocaleString()}</div>
+                  <div className="text-xs text-slate-500">visits</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
+            <Syringe size={18} className="text-emerald-600" />
+            <div>
+              <div className="font-semibold text-slate-900">Vaccination Coverage</div>
+              <div className="text-xs text-slate-500">Per district average</div>
+            </div>
+          </div>
+          <div className="p-5 space-y-3">
+            {districtCoverage.map(d => (
+              <div key={d.district}>
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="font-medium text-slate-700">{d.district}</span>
+                  <span className="text-slate-600">{d.pct}%</span>
+                </div>
+                <div className="h-2.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                  <div className={`h-full rounded-full ${d.pct>=85?'bg-emerald-500':d.pct>=75?'bg-amber-500':'bg-red-500'}`} style={{ width: `${d.pct}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <Modal open={!!editing} onClose={()=>setEditing(null)} title={editing ? `Edit Facility — ${editing.name}` : ''}
+        footer={<>
+          <button onClick={()=>setEditing(null)} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Cancel</button>
+          <button form="hospital-form" type="submit" disabled={!perms.canEdit}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-white ${perms.canEdit ? 'bg-uinr hover:bg-uinr-dark' : 'bg-slate-300 cursor-not-allowed'}`}>
+            <Save size={16} /> Save Changes
+          </button>
+        </>}>
+        {editing && <HospitalForm initial={editing} onSave={handleSave} onClose={()=>setEditing(null)} user={user} />}
+      </Modal>
+
+      <Modal open={adding} onClose={()=>setAdding(false)} title="Add Facility"
+        footer={<>
+          <button onClick={()=>setAdding(false)} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Cancel</button>
+          <button form="hospital-form" type="submit" className="flex items-center gap-2 px-4 py-2 rounded-lg text-white bg-uinr hover:bg-uinr-dark">
+            <Plus size={16} /> Add Facility
+          </button>
+        </>}>
+        <HospitalForm onSave={handleSave} onClose={()=>setAdding(false)} user={user} />
+      </Modal>
+
+      <Confirm open={!!confirmDel} onClose={()=>setConfirmDel(null)} onConfirm={handleDelete}
+        title="Delete facility?" message={confirmDel ? `${confirmDel.name} in ${confirmDel.district} will be removed.` : ''} />
+    </div>
+  );
+}
+
+/* ===========================================================
+   Family tree SVG visualization
+   =========================================================== */
+function FamilyTreeSVG({ family, students, hospitals, onNodeClick }) {
+  const { grandparents, parents, children } = family.tree;
+  const width = 880, height = 460;
+  const gpY = 60, pY = 220, cY = 380;
+
+  const layout = (people, y) => {
+    const gap = width / (people.length + 1);
+    return people.map((p, i) => ({ ...p, x: gap * (i + 1), y }));
+  };
+  const gp = layout(grandparents, gpY);
+  const pa = layout(parents, pY);
+  const ch = layout(children, cY);
+
+  const Node = ({ person }) => {
+    const linkedStudent = students.find(s => s.nin === person.nin);
+    const isStudent = !!linkedStudent;
+    return (
+      <g onClick={() => onNodeClick(person)} className="cursor-pointer">
+        <rect x={person.x - 90} y={person.y - 26} width={180} height={52} rx={8}
+              fill={isStudent ? '#e0f2fe' : '#ffffff'} stroke={isStudent ? '#0284c7' : '#1a3a5c'} strokeWidth={1.5} />
+        <text x={person.x} y={person.y - 6} textAnchor="middle" fontSize="13" fontWeight="600" fill="#1a3a5c">{person.name}</text>
+        <text x={person.x} y={person.y + 11} textAnchor="middle" fontSize="10" fontFamily="ui-monospace, monospace" fill="#475569">{person.nin}</text>
+      </g>
+    );
+  };
+
+  return (
+    <div className="bg-slate-50 border border-slate-200 rounded-xl overflow-x-auto">
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" style={{ minWidth: 720 }}>
+        {/* Connectors gp -> parents */}
+        {pa.map((p, i) => gp.map((g, j) => (
+          <line key={`gp-${i}-${j}`} x1={g.x} y1={g.y + 26} x2={p.x} y2={p.y - 26} stroke="#94a3b8" strokeWidth={1.2} />
+        )))}
+        {/* Connectors parents -> children */}
+        {ch.map((c, i) => pa.map((p, j) => (
+          <line key={`pc-${i}-${j}`} x1={p.x} y1={p.y + 26} x2={c.x} y2={c.y - 26} stroke="#94a3b8" strokeWidth={1.2} />
+        )))}
+        {/* Generation labels */}
+        <text x={20} y={gpY + 4} fontSize="11" fontWeight="700" fill="#64748b">GRANDPARENTS</text>
+        <text x={20} y={pY + 4} fontSize="11" fontWeight="700" fill="#64748b">PARENTS</text>
+        <text x={20} y={cY + 4} fontSize="11" fontWeight="700" fill="#64748b">CHILDREN</text>
+        {gp.map((p, i) => <Node key={`gp-n-${i}`} person={p} />)}
+        {pa.map((p, i) => <Node key={`pa-n-${i}`} person={p} />)}
+        {ch.map((p, i) => <Node key={`ch-n-${i}`} person={p} />)}
+      </svg>
+      <div className="px-4 py-2 text-xs text-slate-500 flex items-center gap-4">
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 bg-sky-100 border border-sky-500 rounded" /> Linked to student record</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 bg-white border border-uinr rounded" /> Family member</span>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Families page
+   =========================================================== */
+function FamiliesPage({ families, students, hospitals, dispatch, user, pushToast, addAudit }) {
+  const perms = permissions(user);
+  const scoped = perms.scopeDistrict ? families.filter(f => f.district === perms.scopeDistrict) : families;
+
+  const [q, setQ] = useState('');
+  const [viewing, setViewing] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [addingMember, setAddingMember] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [personInfo, setPersonInfo] = useState(null);
+
+  const filtered = scoped.filter(f => q==='' || f.head.toLowerCase().includes(q.toLowerCase()) || f.nin.toLowerCase().includes(q.toLowerCase()));
+  const { sorted, headerClick, SortIcon } = useSorted(filtered, 'head');
+
+  const handleSave = (rec) => {
+    if (rec.id) { dispatch({ type:'FAM_UPDATE', payload: rec }); addAudit('Edited', 'Families', rec.head, user); pushToast('success', `Saved ${rec.head}`); }
+    else {
+      const id = Math.max(0, ...families.map(f=>f.id))+1;
+      const withTree = { ...rec, id, tree: rec.tree && rec.tree.parents.length ? rec.tree : { grandparents:[], parents:[{ name: rec.head, nin: rec.nin }], children:[] } };
+      dispatch({ type:'FAM_ADD', payload: withTree });
+      addAudit('Created', 'Families', rec.head, user);
+      pushToast('success', `Added ${rec.head}`);
+    }
+    setEditing(null); setAdding(false);
+  };
+
+  const handleDelete = () => {
+    const r = confirmDel;
+    dispatch({ type:'FAM_DELETE', payload:r.id });
+    addAudit('Deleted', 'Families', r.head, user);
+    pushToast('success', `Deleted ${r.head}`);
+    setConfirmDel(null);
+  };
+
+  const addMember = (gen, name, ninVal) => {
+    const updated = JSON.parse(JSON.stringify(viewing));
+    updated.tree[gen].push({ name, nin: ninVal });
+    updated.members += 1;
+    dispatch({ type:'FAM_UPDATE', payload: updated });
+    addAudit('Edited', 'Families', `${updated.head} (added ${gen} member ${name})`, user);
+    pushToast('success', `Added ${name}`);
+    setViewing(updated);
+    setAddingMember(null);
+  };
+
+  const doExport = () => {
+    exportCSV('families.csv', sorted, [
+      { key:'head', label:'Family Head' }, { key:'nin', label:'NIN' }, { key:'clan', label:'Clan' },
+      { key:'tribe', label:'Tribe' }, { key:'village', label:'Village' }, { key:'district', label:'District' },
+      { key:'members', label:'Members' }, { key:'marriage', label:'Marriage' }
+    ]);
+    pushToast('success', 'Exported families.csv');
+  };
+
+  const personDetails = (person) => {
+    const student = students.find(s => s.nin === person.nin);
+    const fam = families.find(f => f.nin === person.nin || f.tree.parents.some(p => p.nin === person.nin));
+    const facilityVisitedNin = person.nin;
+    const facility = hospitals.find(h => h.district === (fam?.district || ''));
+    return { student, fam, facility };
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search families…"
+                 className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-uinr" />
+        </div>
+        <div className="ml-auto flex gap-2">
+          <button onClick={doExport} className="flex items-center gap-2 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
+            <Download size={16} /> Export CSV
+          </button>
+          <button disabled={!perms.canCreate} onClick={()=>setAdding(true)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${perms.canCreate ? 'bg-uinr hover:bg-uinr-dark' : 'bg-slate-300 cursor-not-allowed'}`}>
+            <Plus size={16} /> Add Family
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                {[['head','Family Head'],['nin','NIN'],['clan','Clan'],['tribe','Tribe'],['village','Village'],['district','District'],['members','Members'],['marriage','Marriage']].map(([k,l])=>(
+                  <th key={k} onClick={()=>headerClick(k)} className="text-left px-4 py-2.5 font-medium cursor-pointer whitespace-nowrap">{l} <SortIcon k={k} /></th>
+                ))}
+                <th className="text-right px-4 py-2.5 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.length === 0 && (
+                <tr><td colSpan="9" className="text-center py-8 text-slate-500">No families found.</td></tr>
+              )}
+              {sorted.map(f => (
+                <tr key={f.id} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={()=>setViewing(f)}>
+                  <td className="px-4 py-2.5 font-medium text-slate-800">{f.head}</td>
+                  <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{f.nin}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{f.clan}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{f.tribe}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{f.village}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{f.district}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{f.members}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{f.marriage}</td>
+                  <td className="px-4 py-2.5 text-right" onClick={e=>e.stopPropagation()}>
+                    <button onClick={()=>setViewing(f)} className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-uinr hover:bg-sky-50"><Eye size={14} /> View</button>
+                    <button onClick={()=>setEditing(f)} disabled={!perms.canEdit}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ml-1 ${perms.canEdit ? 'text-uinr hover:bg-sky-50' : 'text-slate-400 cursor-not-allowed'}`}>
+                      <Pencil size={14} /> Edit
+                    </button>
+                    <button onClick={()=>setConfirmDel(f)} disabled={!perms.canDelete}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ml-1 ${perms.canDelete ? 'text-red-600 hover:bg-red-50' : 'text-slate-400 cursor-not-allowed'}`}>
+                      <Trash2 size={14} /> Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <Modal open={!!viewing} onClose={()=>setViewing(null)} wide
+        title={viewing ? `Family of ${viewing.head} — ${viewing.clan} Clan, ${viewing.tribe}` : ''}
+        footer={<>
+          <button onClick={()=>setAddingMember({ gen:'children' })} disabled={!perms.canEdit}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-white ${perms.canEdit ? 'bg-uinr hover:bg-uinr-dark' : 'bg-slate-300 cursor-not-allowed'}`}>
+            <Plus size={16} /> Add Family Member
+          </button>
+          <button onClick={()=>setViewing(null)} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Close</button>
+        </>}>
+        {viewing && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+              <Stat label="Village" value={viewing.village} />
+              <Stat label="District" value={viewing.district} />
+              <Stat label="Members" value={viewing.members} />
+              <Stat label="Marriage" value={viewing.marriage} />
+            </div>
+            <FamilyTreeSVG family={viewing} students={students} hospitals={hospitals} onNodeClick={setPersonInfo} />
+            <p className="text-xs text-slate-500">Click any person in the tree to view linked student and health records.</p>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!personInfo} onClose={()=>setPersonInfo(null)}
+        title={personInfo ? `${personInfo.name} — Linked Records` : ''}>
+        {personInfo && (() => {
+          const d = personDetails(personInfo);
+          return (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Stat label="Name" value={personInfo.name} />
+                <Stat label="NIN" value={personInfo.nin} mono />
+              </div>
+              <div className="border-t pt-3">
+                <div className="font-semibold text-slate-800 mb-2 flex items-center gap-2"><GraduationCap size={16} className="text-uinr" /> Student Record</div>
+                {d.student ? (
+                  <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 grid grid-cols-2 gap-2 text-sm">
+                    <Stat label="School" value={d.student.school} />
+                    <Stat label="Level" value={d.student.level} />
+                    <Stat label="District" value={d.student.district} />
+                    <Stat label="Status" value={<Badge kind={statusKind(d.student.status)}>{d.student.status}</Badge>} />
+                  </div>
+                ) : <div className="text-sm text-slate-500 italic">No student record linked to this NIN.</div>}
+              </div>
+              <div className="border-t pt-3">
+                <div className="font-semibold text-slate-800 mb-2 flex items-center gap-2"><Hospital size={16} className="text-emerald-600" /> Linked Health Facility (district)</div>
+                {d.facility ? (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 grid grid-cols-2 gap-2 text-sm">
+                    <Stat label="Facility" value={d.facility.name} />
+                    <Stat label="Level" value={d.facility.level} />
+                    <Stat label="In-charge" value={d.facility.inCharge} />
+                    <Stat label="Drug Stock" value={<Badge kind={statusKind(d.facility.stock)}>{d.facility.stock}</Badge>} />
+                  </div>
+                ) : <div className="text-sm text-slate-500 italic">No district facility found.</div>}
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      <Modal open={!!addingMember} onClose={()=>setAddingMember(null)} title="Add Family Member"
+        footer={<>
+          <button onClick={()=>setAddingMember(null)} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Cancel</button>
+          <button form="member-form" type="submit" className="flex items-center gap-2 px-4 py-2 rounded-lg text-white bg-uinr hover:bg-uinr-dark"><Plus size={16} /> Add</button>
+        </>}>
+        <AddMemberForm onSubmit={(gen, n, nv) => addMember(gen, n, nv)} />
+      </Modal>
+
+      <Modal open={!!editing} onClose={()=>setEditing(null)} title={editing ? `Edit Family — ${editing.head}` : ''}
+        footer={<>
+          <button onClick={()=>setEditing(null)} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Cancel</button>
+          <button form="family-form" type="submit" disabled={!perms.canEdit}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-white ${perms.canEdit ? 'bg-uinr hover:bg-uinr-dark' : 'bg-slate-300 cursor-not-allowed'}`}>
+            <Save size={16} /> Save Changes
+          </button>
+        </>}>
+        {editing && <FamilyForm initial={editing} onSave={handleSave} onClose={()=>setEditing(null)} user={user} />}
+      </Modal>
+
+      <Modal open={adding} onClose={()=>setAdding(false)} title="Add Family"
+        footer={<>
+          <button onClick={()=>setAdding(false)} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Cancel</button>
+          <button form="family-form" type="submit" className="flex items-center gap-2 px-4 py-2 rounded-lg text-white bg-uinr hover:bg-uinr-dark">
+            <Plus size={16} /> Add Family
+          </button>
+        </>}>
+        <FamilyForm onSave={handleSave} onClose={()=>setAdding(false)} user={user} />
+      </Modal>
+
+      <Confirm open={!!confirmDel} onClose={()=>setConfirmDel(null)} onConfirm={handleDelete}
+        title="Delete family?" message={confirmDel ? `Family of ${confirmDel.head} (${confirmDel.district}) will be removed.` : ''} />
+    </div>
+  );
+}
+
+function AddMemberForm({ onSubmit }) {
+  const [gen, setGen] = useState('children');
+  const [name, setName] = useState('');
+  const [nin, setNin] = useState('');
+  return (
+    <form id="member-form" onSubmit={e=>{e.preventDefault(); onSubmit(gen, name, nin);}} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <Field label="Generation">
+        <select className={inputCls} value={gen} onChange={e=>setGen(e.target.value)}>
+          <option value="grandparents">Grandparents</option>
+          <option value="parents">Parents</option>
+          <option value="children">Children</option>
+        </select>
+      </Field>
+      <Field label="Name"><input className={inputCls} value={name} onChange={e=>setName(e.target.value)} required /></Field>
+      <Field label="NIN"><input className={inputCls} value={nin} onChange={e=>setNin(e.target.value)} required /></Field>
+    </form>
+  );
+}
+
+function Stat({ label, value, mono }) {
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-wide text-slate-500 font-semibold">{label}</div>
+      <div className={`text-sm text-slate-800 mt-0.5 ${mono ? 'font-mono' : ''}`}>{value}</div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Audit Log page
+   =========================================================== */
+function AuditPage({ audit, user, pushToast }) {
+  const [mod, setMod] = useState('All');
+  const [role, setRole] = useState('All');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+
+  const scoped = useMemo(() => {
+    if (user.role === 'Super Admin') return audit;
+    if (user.role === 'Ministry Officer') return audit.filter(a => a.role !== 'District Registrar' || a.district === user.district);
+    return audit.filter(a => a.district === user.district);
+  }, [audit, user]);
+
+  const filtered = scoped.filter(a =>
+    (mod === 'All' || a.module === mod) &&
+    (role === 'All' || a.role === role) &&
+    (!from || a.ts.slice(0,10) >= from) &&
+    (!to || a.ts.slice(0,10) <= to)
+  );
+  const { sorted, headerClick, SortIcon } = useSorted(filtered, 'ts');
+
+  const doExport = () => {
+    exportCSV('audit-log.csv', sorted, [
+      { key:'ts', label:'Timestamp' }, { key:'action', label:'Action' }, { key:'module', label:'Module' },
+      { key:'record', label:'Record' }, { key:'by', label:'Performed By' }, { key:'role', label:'Role' }, { key:'district', label:'District' }
+    ]);
+    pushToast('success', 'Exported audit-log.csv');
+  };
+
+  const modules = ['All','Students','Hospitals','Families','Audit','Roles'];
+  const roles = ['All','Super Admin','Ministry Officer','District Registrar'];
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-slate-500">Module</span>
+          <select className={inputCls + ' w-auto'} value={mod} onChange={e=>setMod(e.target.value)}>
+            {modules.map(m => <option key={m}>{m}</option>)}
+          </select>
+          <span className="text-slate-500 ml-2">Role</span>
+          <select className={inputCls + ' w-auto'} value={role} onChange={e=>setRole(e.target.value)}>
+            {roles.map(r => <option key={r}>{r}</option>)}
+          </select>
+          <span className="text-slate-500 ml-2">From</span>
+          <input type="date" className={inputCls + ' w-auto'} value={from} onChange={e=>setFrom(e.target.value)} />
+          <span className="text-slate-500 ml-2">To</span>
+          <input type="date" className={inputCls + ' w-auto'} value={to} onChange={e=>setTo(e.target.value)} />
+        </div>
+        <button onClick={doExport} className="ml-auto flex items-center gap-2 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
+          <Download size={16} /> Export CSV
+        </button>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <d
