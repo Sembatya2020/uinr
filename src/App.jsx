@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useMemo, useReducer, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useReducer, useCallback, useRef } from 'react';
+import { isConfigured as supabaseConfigured } from './lib/supabase';
+import { api, loadAll, seedDemoData, isEmpty, wipeAll } from './lib/api';
 import {
   Shield, LogIn, LayoutDashboard, GraduationCap, Hospital, Users2, FileClock,
   KeyRound, Settings as SettingsIcon, LogOut, Search, Plus, Pencil, Trash2,
@@ -7,7 +9,8 @@ import {
   ShieldAlert, RefreshCcw, Save, Lock, TrendingUp, TrendingDown, BellRing,
   Sparkles, ArrowRight, School, Stethoscope, BarChart3, Globe2,
   Command, Bell, FileText, Printer, ArrowLeft, BookOpen, HeartPulse, Network,
-  Clock, User as UserIcon, ChevronRight, CheckCheck, RotateCcw
+  Clock, User as UserIcon, ChevronRight, CheckCheck, RotateCcw,
+  Database, WifiOff, Loader2, Cloud, CloudOff
 } from 'lucide-react';
 
 /* ===========================================================
@@ -465,6 +468,7 @@ function Sidebar({ section, setSection, user, onLogout, open, setOpen }) {
     { key:'students',  label:'Students',       Icon:GraduationCap },
     { key:'hospitals', label:'Hospitals',      Icon:Hospital },
     { key:'families',  label:'Family Trees',   Icon:Users2 },
+    { key:'reports',   label:'Reports',        Icon:FileText },
     { key:'audit',     label:'Audit Log',      Icon:FileClock },
     { key:'roles',     label:'Roles & Access', Icon:KeyRound, superAdminOnly:true },
     { key:'settings',  label:'Settings',       Icon:SettingsIcon }
@@ -473,8 +477,8 @@ function Sidebar({ section, setSection, user, onLogout, open, setOpen }) {
 
   return (
     <>
-      {open && <div className="fixed inset-0 bg-black/40 z-30 lg:hidden" onClick={()=>setOpen(false)} />}
-      <aside className={`fixed lg:static z-40 inset-y-0 left-0 w-64 bg-uinr text-white flex flex-col transition-transform ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+      {open && <div className="fixed inset-0 bg-black/40 z-30 lg:hidden no-print" onClick={()=>setOpen(false)} />}
+      <aside className={`fixed lg:static z-40 inset-y-0 left-0 w-64 bg-uinr text-white flex flex-col transition-transform no-print ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
         <div className="px-5 py-5 border-b border-white/10 flex items-center gap-3">
           <div className="bg-white/15 p-2 rounded-lg"><Shield size={22} /></div>
           <div>
@@ -513,25 +517,51 @@ function Sidebar({ section, setSection, user, onLogout, open, setOpen }) {
 /* ===========================================================
    Top bar
    =========================================================== */
-function Topbar({ title, subtitle, onMenu, user }) {
+function Topbar({ title, subtitle, onMenu, user, onOpenPalette, onOpenNotif, unreadCount, dbConnected, dbLoading }) {
   return (
-    <div className="bg-white border-b border-slate-200 sticky top-0 z-20">
-      <div className="px-4 lg:px-8 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+    <div className="bg-white border-b border-slate-200 sticky top-0 z-20 no-print">
+      <div className="px-4 lg:px-8 py-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           <button onClick={onMenu} className="lg:hidden p-2 hover:bg-slate-100 rounded-lg"><Menu size={20} /></button>
-          <div>
-            <div className="text-lg font-bold text-slate-900 leading-tight">{title}</div>
-            <div className="text-xs text-slate-500">{subtitle}</div>
+          <div className="min-w-0">
+            <div className="text-lg font-bold text-slate-900 leading-tight truncate">{title}</div>
+            <div className="text-xs text-slate-500 truncate">{subtitle}</div>
           </div>
         </div>
-        <div className="hidden sm:flex items-center gap-3">
-          <Badge kind="blue"><span className="px-1">{user.role}</span></Badge>
-          <div className="text-right">
-            <div className="text-sm font-medium text-slate-800">{user.name}</div>
-            <div className="text-xs text-slate-500 flex items-center gap-1 justify-end"><MapPin size={12} />{user.district}</div>
+        <div className="flex items-center gap-2">
+          <button onClick={onOpenPalette}
+            className="hidden md:flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg text-sm text-slate-600 min-w-[260px]">
+            <Search size={14} />
+            <span className="flex-1 text-left">Search records or jump to…</span>
+            <kbd className="text-[10px] px-1.5 py-0.5 bg-white border border-slate-200 rounded text-slate-500 flex items-center gap-0.5">
+              <Command size={10} />K
+            </kbd>
+          </button>
+          <button onClick={onOpenPalette} className="md:hidden p-2 hover:bg-slate-100 rounded-lg" aria-label="Search"><Search size={18} /></button>
+          <div className={`hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold border ${
+            dbLoading ? 'bg-sky-50 text-sky-700 border-sky-200'
+              : dbConnected ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              : 'bg-amber-50 text-amber-700 border-amber-200'
+          }`}>
+            {dbLoading ? <Loader2 size={12} className="animate-spin" /> : dbConnected ? <Cloud size={12} /> : <CloudOff size={12} />}
+            {dbLoading ? 'Loading…' : dbConnected ? 'Database' : 'Demo mode'}
           </div>
-          <div className="w-9 h-9 bg-uinr text-white rounded-full flex items-center justify-center font-semibold">
-            {user.name.split(' ').map(s=>s[0]).slice(0,2).join('')}
+          <button onClick={onOpenNotif} className="relative p-2 hover:bg-slate-100 rounded-lg" aria-label="Notifications">
+            <Bell size={18} className="text-slate-700" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 bg-rose-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
+          </button>
+          <div className="hidden sm:flex items-center gap-3 ml-1">
+            <div className="text-right">
+              <div className="text-sm font-medium text-slate-800">{user.name}</div>
+              <div className="text-xs text-slate-500 flex items-center gap-1 justify-end"><MapPin size={12} />{user.district}</div>
+            </div>
+            <div className="w-9 h-9 bg-uinr text-white rounded-full flex items-center justify-center font-semibold">
+              {user.name.split(' ').map(s=>s[0]).slice(0,2).join('')}
+            </div>
           </div>
         </div>
       </div>
@@ -1187,7 +1217,7 @@ function permissions(user) {
 /* ===========================================================
    Students page
    =========================================================== */
-function StudentsPage({ students, dispatch, user, pushToast, audit, addAudit }) {
+function StudentsPage({ students, dispatch, user, pushToast, audit, addAudit, openProfile }) {
   const perms = permissions(user);
   const scoped = perms.scopeDistrict ? students.filter(s => s.district === perms.scopeDistrict) : students;
 
@@ -1205,25 +1235,28 @@ function StudentsPage({ students, dispatch, user, pushToast, audit, addAudit }) 
   );
   const { sorted, headerClick, SortIcon } = useSorted(filtered, 'name');
 
-  const handleSave = (rec) => {
-    if (rec.id) {
-      dispatch({ type:'STUDENT_UPDATE', payload: rec });
-      addAudit('Edited', 'Students', rec.name, user);
-      pushToast('success', `Saved ${rec.name}`);
-    } else {
-      const id = Math.max(0, ...students.map(s=>s.id)) + 1;
-      dispatch({ type:'STUDENT_ADD', payload: { ...rec, id } });
-      addAudit('Created', 'Students', rec.name, user);
-      pushToast('success', `Added ${rec.name}`);
-    }
-    setEditing(null); setAdding(false);
+  const handleSave = async (rec) => {
+    try {
+      if (rec.id) {
+        await dispatch({ type:'STUDENT_UPDATE', payload: rec });
+        addAudit('Edited', 'Students', rec.name, user);
+        pushToast('success', `Saved ${rec.name}`);
+      } else {
+        await dispatch({ type:'STUDENT_ADD', payload: rec });
+        addAudit('Created', 'Students', rec.name, user);
+        pushToast('success', `Added ${rec.name}`);
+      }
+      setEditing(null); setAdding(false);
+    } catch {}
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     const r = confirmDel;
-    dispatch({ type:'STUDENT_DELETE', payload: r.id });
-    addAudit('Deleted', 'Students', r.name, user);
-    pushToast('success', `Deleted ${r.name}`);
+    try {
+      await dispatch({ type:'STUDENT_DELETE', payload: r.id });
+      addAudit('Deleted', 'Students', r.name, user);
+      pushToast('success', `Deleted ${r.name}`);
+    } catch {}
     setConfirmDel(null);
   };
 
@@ -1298,9 +1331,13 @@ function StudentsPage({ students, dispatch, user, pushToast, audit, addAudit }) 
                   <td className="px-4 py-2.5 text-slate-600">{s.unebResults}</td>
                   <td className="px-4 py-2.5"><Badge kind={statusKind(s.status)}>{s.status}</Badge></td>
                   <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{s.guardianNin}</td>
-                  <td className="px-4 py-2.5 text-right" onClick={e=>e.stopPropagation()}>
+                  <td className="px-4 py-2.5 text-right whitespace-nowrap" onClick={e=>e.stopPropagation()}>
+                    <button onClick={()=>openProfile({ name:s.name, nin:s.nin })}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-uinr hover:bg-sky-50">
+                      <Eye size={14} /> Profile
+                    </button>
                     <button onClick={()=>setEditing(s)} disabled={!perms.canEdit}
-                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${perms.canEdit ? 'text-uinr hover:bg-sky-50' : 'text-slate-400 cursor-not-allowed'}`}>
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ml-1 ${perms.canEdit ? 'text-uinr hover:bg-sky-50' : 'text-slate-400 cursor-not-allowed'}`}>
                       <Pencil size={14} /> Edit
                     </button>
                     <button onClick={()=>setConfirmDel(s)} disabled={!perms.canDelete}
@@ -1357,17 +1394,28 @@ function HospitalsPage({ hospitals, dispatch, user, pushToast, addAudit }) {
   const filtered = scoped.filter(h => q==='' || h.name.toLowerCase().includes(q.toLowerCase()) || h.district.toLowerCase().includes(q.toLowerCase()));
   const { sorted, headerClick, SortIcon } = useSorted(filtered, 'name');
 
-  const handleSave = (rec) => {
-    if (rec.id) { dispatch({ type:'HOSP_UPDATE', payload: rec }); addAudit('Edited', 'Hospitals', rec.name, user); pushToast('success', `Saved ${rec.name}`); }
-    else { const id = Math.max(0, ...hospitals.map(h=>h.id))+1; dispatch({ type:'HOSP_ADD', payload: {...rec, id} }); addAudit('Created', 'Hospitals', rec.name, user); pushToast('success', `Added ${rec.name}`); }
-    setEditing(null); setAdding(false);
+  const handleSave = async (rec) => {
+    try {
+      if (rec.id) {
+        await dispatch({ type:'HOSP_UPDATE', payload: rec });
+        addAudit('Edited', 'Hospitals', rec.name, user);
+        pushToast('success', `Saved ${rec.name}`);
+      } else {
+        await dispatch({ type:'HOSP_ADD', payload: rec });
+        addAudit('Created', 'Hospitals', rec.name, user);
+        pushToast('success', `Added ${rec.name}`);
+      }
+      setEditing(null); setAdding(false);
+    } catch {}
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     const r = confirmDel;
-    dispatch({ type:'HOSP_DELETE', payload:r.id });
-    addAudit('Deleted', 'Hospitals', r.name, user);
-    pushToast('success', `Deleted ${r.name}`);
+    try {
+      await dispatch({ type:'HOSP_DELETE', payload:r.id });
+      addAudit('Deleted', 'Hospitals', r.name, user);
+      pushToast('success', `Deleted ${r.name}`);
+    } catch {}
     setConfirmDel(null);
   };
 
@@ -1585,7 +1633,7 @@ function FamilyTreeSVG({ family, students, hospitals, onNodeClick }) {
 /* ===========================================================
    Families page
    =========================================================== */
-function FamiliesPage({ families, students, hospitals, dispatch, user, pushToast, addAudit }) {
+function FamiliesPage({ families, students, hospitals, dispatch, user, pushToast, addAudit, openProfile }) {
   const perms = permissions(user);
   const scoped = perms.scopeDistrict ? families.filter(f => f.district === perms.scopeDistrict) : families;
 
@@ -1600,35 +1648,43 @@ function FamiliesPage({ families, students, hospitals, dispatch, user, pushToast
   const filtered = scoped.filter(f => q==='' || f.head.toLowerCase().includes(q.toLowerCase()) || f.nin.toLowerCase().includes(q.toLowerCase()));
   const { sorted, headerClick, SortIcon } = useSorted(filtered, 'head');
 
-  const handleSave = (rec) => {
-    if (rec.id) { dispatch({ type:'FAM_UPDATE', payload: rec }); addAudit('Edited', 'Families', rec.head, user); pushToast('success', `Saved ${rec.head}`); }
-    else {
-      const id = Math.max(0, ...families.map(f=>f.id))+1;
-      const withTree = { ...rec, id, tree: rec.tree && rec.tree.parents.length ? rec.tree : { grandparents:[], parents:[{ name: rec.head, nin: rec.nin }], children:[] } };
-      dispatch({ type:'FAM_ADD', payload: withTree });
-      addAudit('Created', 'Families', rec.head, user);
-      pushToast('success', `Added ${rec.head}`);
-    }
-    setEditing(null); setAdding(false);
+  const handleSave = async (rec) => {
+    try {
+      if (rec.id) {
+        await dispatch({ type:'FAM_UPDATE', payload: rec });
+        addAudit('Edited', 'Families', rec.head, user);
+        pushToast('success', `Saved ${rec.head}`);
+      } else {
+        const withTree = { ...rec, tree: rec.tree && rec.tree.parents.length ? rec.tree : { grandparents:[], parents:[{ name: rec.head, nin: rec.nin }], children:[] } };
+        await dispatch({ type:'FAM_ADD', payload: withTree });
+        addAudit('Created', 'Families', rec.head, user);
+        pushToast('success', `Added ${rec.head}`);
+      }
+      setEditing(null); setAdding(false);
+    } catch {}
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     const r = confirmDel;
-    dispatch({ type:'FAM_DELETE', payload:r.id });
-    addAudit('Deleted', 'Families', r.head, user);
-    pushToast('success', `Deleted ${r.head}`);
+    try {
+      await dispatch({ type:'FAM_DELETE', payload:r.id });
+      addAudit('Deleted', 'Families', r.head, user);
+      pushToast('success', `Deleted ${r.head}`);
+    } catch {}
     setConfirmDel(null);
   };
 
-  const addMember = (gen, name, ninVal) => {
+  const addMember = async (gen, name, ninVal) => {
     const updated = JSON.parse(JSON.stringify(viewing));
     updated.tree[gen].push({ name, nin: ninVal });
     updated.members += 1;
-    dispatch({ type:'FAM_UPDATE', payload: updated });
-    addAudit('Edited', 'Families', `${updated.head} (added ${gen} member ${name})`, user);
-    pushToast('success', `Added ${name}`);
-    setViewing(updated);
-    setAddingMember(null);
+    try {
+      await dispatch({ type:'FAM_UPDATE', payload: updated });
+      addAudit('Edited', 'Families', `${updated.head} (added ${gen} member ${name})`, user);
+      pushToast('success', `Added ${name}`);
+      setViewing(updated);
+      setAddingMember(null);
+    } catch {}
   };
 
   const doExport = () => {
@@ -1727,8 +1783,8 @@ function FamiliesPage({ families, students, hospitals, dispatch, user, pushToast
               <Stat label="Members" value={viewing.members} />
               <Stat label="Marriage" value={viewing.marriage} />
             </div>
-            <FamilyTreeSVG family={viewing} students={students} hospitals={hospitals} onNodeClick={setPersonInfo} />
-            <p className="text-xs text-slate-500">Click any person in the tree to view linked student and health records.</p>
+            <FamilyTreeSVG family={viewing} students={students} hospitals={hospitals} onNodeClick={(p)=>{ setViewing(null); openProfile(p); }} />
+            <p className="text-xs text-slate-500">Click any person in the tree to open their full citizen profile (education, health, family, audit).</p>
           </div>
         )}
       </Modal>
@@ -1930,18 +1986,29 @@ function RolesPage({ admins, dispatch, user, pushToast, addAudit }) {
   const [adding, setAdding] = useState(false);
   const [confirmAct, setConfirmAct] = useState(null);
 
-  const handleSave = (rec) => {
-    if (rec.id) { dispatch({ type:'USER_UPDATE', payload: rec }); addAudit('Edited', 'Roles', `User: ${rec.username}`, user); pushToast('success', `Saved ${rec.name}`); }
-    else { const id = Math.max(0, ...admins.map(a=>a.id))+1; dispatch({ type:'USER_ADD', payload: {...rec, id} }); addAudit('Created', 'Roles', `User: ${rec.username}`, user); pushToast('success', `Added ${rec.name}`); }
-    setEditing(null); setAdding(false);
+  const handleSave = async (rec) => {
+    try {
+      if (rec.id) {
+        await dispatch({ type:'USER_UPDATE', payload: rec });
+        addAudit('Edited', 'Roles', `User: ${rec.username}`, user);
+        pushToast('success', `Saved ${rec.name}`);
+      } else {
+        await dispatch({ type:'USER_ADD', payload: rec });
+        addAudit('Created', 'Roles', `User: ${rec.username}`, user);
+        pushToast('success', `Added ${rec.name}`);
+      }
+      setEditing(null); setAdding(false);
+    } catch {}
   };
 
-  const toggle = () => {
+  const toggle = async () => {
     const u = confirmAct;
     const next = { ...u, status: u.status === 'Active' ? 'Suspended' : 'Active' };
-    dispatch({ type:'USER_UPDATE', payload: next });
-    addAudit('Edited', 'Roles', `User: ${u.username} → ${next.status}`, user);
-    pushToast('success', `${u.name} is now ${next.status}`);
+    try {
+      await dispatch({ type:'USER_UPDATE', payload: next });
+      addAudit('Edited', 'Roles', `User: ${u.username} → ${next.status}`, user);
+      pushToast('success', `${u.name} is now ${next.status}`);
+    } catch {}
     setConfirmAct(null);
   };
 
@@ -2031,16 +2098,26 @@ function RolesPage({ admins, dispatch, user, pushToast, addAudit }) {
 /* ===========================================================
    Settings page
    =========================================================== */
-function SettingsPage({ settings, setSettings, user, pushToast, students, hospitals, families, audit }) {
+function SettingsPage({ settings, setSettings, user, pushToast, students, hospitals, families, audit, resetDemoData, seedDemo, seeding, dbConnected, dbError }) {
   const [sysName, setSysName] = useState(settings.sysName);
   const [adminEmail, setAdminEmail] = useState(settings.adminEmail);
   const [offlineSync, setOfflineSync] = useState(settings.offlineSync);
   const [oldPw, setOldPw] = useState(''); const [newPw, setNewPw] = useState(''); const [confirmPw, setConfirmPw] = useState('');
+  const [savingSys, setSavingSys] = useState(false);
 
-  const saveSys = (e) => {
+  const saveSys = async (e) => {
     e.preventDefault();
-    setSettings({ ...settings, sysName, adminEmail, offlineSync });
-    pushToast('success', 'System settings saved');
+    const next = { ...settings, sysName, adminEmail, offlineSync };
+    setSavingSys(true);
+    try {
+      if (dbConnected) await api.settings.save(next);
+      setSettings(next);
+      pushToast('success', 'System settings saved');
+    } catch (err) {
+      pushToast('error', `Save failed: ${err.message}`);
+    } finally {
+      setSavingSys(false);
+    }
   };
   const savePw = (e) => {
     e.preventDefault();
@@ -2101,6 +2178,639 @@ function SettingsPage({ settings, setSettings, user, pushToast, students, hospit
           <Stat label="Audit entries" value={audit.length} />
         </div>
       </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+        <div className="px-5 py-4 border-b border-slate-200 font-semibold text-slate-900 flex items-center gap-2">
+          <Database size={18} className="text-uinr" /> Database
+        </div>
+        <div className="p-5 space-y-4">
+          <div className={`flex items-start gap-3 p-4 rounded-lg border ${dbConnected ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+            {dbConnected
+              ? <Cloud size={20} className="text-emerald-700 shrink-0 mt-0.5" />
+              : <CloudOff size={20} className="text-amber-700 shrink-0 mt-0.5" />}
+            <div className="flex-1">
+              <div className={`text-sm font-semibold ${dbConnected ? 'text-emerald-900' : 'text-amber-900'}`}>
+                {dbConnected ? 'Connected to Supabase' : 'Demo mode (local browser storage only)'}
+              </div>
+              <div className={`text-xs mt-0.5 ${dbConnected ? 'text-emerald-800' : 'text-amber-800'}`}>
+                {dbConnected
+                  ? 'All edits sync to the shared Postgres database. Every signed-in device sees the same data.'
+                  : 'Edits are saved to this browser only. Other devices will not see them. See SUPABASE_SETUP.md to connect a real database.'}
+              </div>
+              {dbError && <div className="text-xs mt-1 text-rose-700">Last error: {dbError}</div>}
+            </div>
+          </div>
+
+          {dbConnected && (
+            <div className="flex flex-wrap gap-2">
+              <button onClick={seedDemo} disabled={seeding}
+                className="flex items-center gap-2 px-3 py-2 bg-uinr text-white rounded-lg text-sm hover:bg-uinr-dark disabled:opacity-60">
+                {seeding ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                Seed demo data
+              </button>
+              <button onClick={resetDemoData} disabled={seeding}
+                className="flex items-center gap-2 px-3 py-2 bg-rose-600 text-white rounded-lg text-sm hover:bg-rose-700 disabled:opacity-60">
+                <RotateCcw size={16} /> Wipe + re-seed
+              </button>
+            </div>
+          )}
+
+          {!dbConnected && (
+            <button onClick={resetDemoData}
+              className="flex items-center gap-2 px-3 py-2 bg-rose-600 text-white rounded-lg text-sm hover:bg-rose-700">
+              <RotateCcw size={16} /> Reset local demo data
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Command palette (Cmd+K / Ctrl+K)
+   =========================================================== */
+function CommandPalette({ open, onClose, state, setSection, openProfile, user }) {
+  const [q, setQ] = useState('');
+  const [idx, setIdx] = useState(0);
+  const perms = user ? permissions(user) : { scopeDistrict: null };
+
+  useEffect(() => { if (open) { setQ(''); setIdx(0); } }, [open]);
+
+  const results = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    if (!term) return [
+      { kind:'nav', label:'Go to Overview',       sub:'Dashboard', target:'overview',  Icon:LayoutDashboard },
+      { kind:'nav', label:'Go to Students',       sub:'Education records', target:'students', Icon:GraduationCap },
+      { kind:'nav', label:'Go to Hospitals',      sub:'Health facilities', target:'hospitals', Icon:Hospital },
+      { kind:'nav', label:'Go to Family Trees',   sub:'Household registry', target:'families', Icon:Users2 },
+      { kind:'nav', label:'Go to Audit Log',      sub:'Immutable history',  target:'audit',    Icon:FileClock },
+      { kind:'nav', label:'Go to Reports',        sub:'Printable summaries', target:'reports', Icon:FileText }
+    ];
+    const out = [];
+    const scopeMatch = (d) => !perms.scopeDistrict || d === perms.scopeDistrict;
+    state.students.forEach(s => {
+      if (scopeMatch(s.district) && (s.name.toLowerCase().includes(term) || s.nin.toLowerCase().includes(term))) {
+        out.push({ kind:'student', label:s.name, sub:`Student · ${s.school} · ${s.district}`, person:{ name:s.name, nin:s.nin }, Icon:GraduationCap });
+      }
+    });
+    state.hospitals.forEach(h => {
+      if (scopeMatch(h.district) && (h.name.toLowerCase().includes(term) || h.district.toLowerCase().includes(term))) {
+        out.push({ kind:'hospital', label:h.name, sub:`Facility · ${h.level} · ${h.district}`, target:'hospitals', Icon:Hospital });
+      }
+    });
+    state.families.forEach(f => {
+      if (scopeMatch(f.district) && (f.head.toLowerCase().includes(term) || f.nin.toLowerCase().includes(term))) {
+        out.push({ kind:'family', label:f.head, sub:`Family · ${f.clan} clan · ${f.district}`, target:'families', Icon:Users2 });
+      }
+    });
+    return out.slice(0, 12);
+  }, [q, state, perms.scopeDistrict]);
+
+  useEffect(() => { setIdx(0); }, [results.length]);
+
+  const pick = (r) => {
+    if (r.kind === 'nav') setSection(r.target);
+    else if (r.kind === 'student') openProfile(r.person);
+    else if (r.kind === 'hospital' || r.kind === 'family') setSection(r.target);
+    onClose();
+  };
+
+  const onKey = (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setIdx(i => Math.min(results.length - 1, i + 1)); }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); setIdx(i => Math.max(0, i - 1)); }
+    if (e.key === 'Enter' && results[idx]) { e.preventDefault(); pick(results[idx]); }
+    if (e.key === 'Escape') onClose();
+  };
+
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[950] bg-black/40 flex items-start justify-center pt-24 px-4 no-print" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden border border-slate-200" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200">
+          <Search size={18} className="text-slate-400" />
+          <input autoFocus value={q} onChange={e=>setQ(e.target.value)} onKeyDown={onKey}
+            placeholder="Search students, hospitals, families, or jump to a section…"
+            className="flex-1 outline-none text-sm" />
+          <kbd className="px-1.5 py-0.5 text-[10px] bg-slate-100 border border-slate-200 rounded text-slate-500">ESC</kbd>
+        </div>
+        <ul className="max-h-[420px] overflow-y-auto">
+          {results.length === 0 && (
+            <li className="px-5 py-8 text-center text-sm text-slate-500">No matches for "{q}".</li>
+          )}
+          {results.map((r, i) => {
+            const Icon = r.Icon;
+            return (
+              <li key={i}
+                  onMouseEnter={()=>setIdx(i)}
+                  onClick={()=>pick(r)}
+                  className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer ${i === idx ? 'bg-uinr/5' : ''}`}>
+                <div className={`p-1.5 rounded-md ${i===idx ? 'bg-uinr text-white' : 'bg-slate-100 text-slate-600'}`}>
+                  <Icon size={14} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-slate-800 truncate">{r.label}</div>
+                  <div className="text-xs text-slate-500 truncate">{r.sub}</div>
+                </div>
+                {i === idx && <ChevronRight size={14} className="text-uinr" />}
+              </li>
+            );
+          })}
+        </ul>
+        <div className="border-t border-slate-200 bg-slate-50 px-4 py-2 text-[11px] text-slate-500 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span><kbd className="px-1.5 py-0.5 bg-white border border-slate-200 rounded">↑↓</kbd> navigate</span>
+            <span><kbd className="px-1.5 py-0.5 bg-white border border-slate-200 rounded">↵</kbd> select</span>
+          </div>
+          <span>Ctrl/Cmd + K to toggle</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Notification bell + panel
+   =========================================================== */
+function NotificationPanel({ open, onClose, alerts, readAlerts, markRead, markAllRead, setSection, audit }) {
+  if (!open) return null;
+  const recentActivity = audit.slice(0, 6);
+  return (
+    <div className="fixed inset-0 z-[850] no-print" onClick={onClose}>
+      <div className="absolute right-4 lg:right-8 top-16 w-[360px] max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden" onClick={e=>e.stopPropagation()}>
+        <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Bell size={16} className="text-uinr" />
+            <span className="font-semibold text-slate-900">Notifications</span>
+            {alerts.length > 0 && <Badge kind="blue">{alerts.length}</Badge>}
+          </div>
+          {alerts.length > 0 && (
+            <button onClick={markAllRead} className="text-xs text-uinr hover:underline flex items-center gap-1">
+              <CheckCheck size={12} /> Mark all read
+            </button>
+          )}
+        </div>
+        <div className="max-h-[420px] overflow-y-auto">
+          <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50">Open alerts</div>
+          {alerts.length === 0 && (
+            <div className="px-4 py-8 text-center text-sm text-slate-500 flex flex-col items-center gap-2">
+              <CheckCircle2 size={24} className="text-emerald-500" /> No open alerts.
+            </div>
+          )}
+          {alerts.map(a => {
+            const Icon = a.Icon;
+            const read = readAlerts.has(a.id);
+            return (
+              <button key={a.id}
+                onClick={() => { markRead(a.id); setSection(a.target); onClose(); }}
+                className={`w-full flex items-start gap-3 px-4 py-2.5 text-left hover:bg-slate-50 border-l-2 ${read ? 'border-transparent opacity-70' : a.kind === 'critical' ? 'border-rose-500' : 'border-amber-500'}`}>
+                <div className={`p-1.5 rounded-lg ${a.kind === 'critical' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                  <Icon size={14} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-slate-800 truncate">{a.title}</div>
+                  <div className="text-xs text-slate-500 truncate">{a.detail}</div>
+                </div>
+                {!read && <span className="w-2 h-2 rounded-full bg-uinr mt-1.5 shrink-0" />}
+              </button>
+            );
+          })}
+          <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500 bg-slate-50 border-t border-slate-200">Recent activity</div>
+          {recentActivity.map(a => (
+            <div key={a.id} className="px-4 py-2.5 border-b border-slate-100 flex items-start gap-3 last:border-0">
+              <div className="p-1.5 rounded-lg bg-slate-100 text-slate-600"><Clock size={14} /></div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-slate-700"><span className="font-semibold">{a.by}</span> {a.action.toLowerCase()} <span className="font-medium">{a.record}</span></div>
+                <div className="text-xs text-slate-500">{a.module} · {a.ts}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Profile view
+   =========================================================== */
+function ProfileView({ person, state, setSection, openProfile, onBack }) {
+  const student   = state.students.find(s => s.nin === person.nin);
+  const family    = state.families.find(f => f.nin === person.nin || f.tree.parents.some(p => p.nin === person.nin) || f.tree.children.some(c => c.nin === person.nin) || f.tree.grandparents.some(g => g.nin === person.nin));
+  const facility  = family ? state.hospitals.find(h => h.district === family.district) : null;
+  const history   = state.audit.filter(a => a.record.toLowerCase().includes(person.name.toLowerCase())).slice(0, 8);
+  const initials  = person.name.split(' ').map(p=>p[0]).slice(0,2).join('').toUpperCase();
+
+  return (
+    <div className="space-y-4">
+      <button onClick={onBack} className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900">
+        <ArrowLeft size={16} /> Back
+      </button>
+
+      <div className="bg-gradient-to-r from-uinr-dark to-uinr-light text-white rounded-2xl p-6 shadow-lg flex items-center gap-5">
+        <div className="w-20 h-20 rounded-full bg-white/15 backdrop-blur flex items-center justify-center text-2xl font-bold">
+          {initials}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs uppercase tracking-wider text-white/70 flex items-center gap-2">
+            <UserIcon size={12} /> Citizen profile
+          </div>
+          <h2 className="text-2xl font-bold mt-1 truncate">{person.name}</h2>
+          <div className="text-sm text-white/80 mt-1 flex flex-wrap items-center gap-3">
+            <span className="font-mono">{person.nin}</span>
+            {family && <span className="flex items-center gap-1"><MapPin size={12} /> {family.district}</span>}
+            {family && <span>{family.clan} clan · {family.tribe}</span>}
+          </div>
+        </div>
+        <div className="hidden md:flex flex-col items-end gap-2">
+          {student && <Badge kind={statusKind(student.status)}>{student.status}</Badge>}
+          {!student && <Badge kind="gray">No student record</Badge>}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
+            <BookOpen size={18} className="text-uinr" />
+            <div>
+              <div className="font-semibold text-slate-900">Education record</div>
+              <div className="text-xs text-slate-500">From the Ministry of Education</div>
+            </div>
+          </div>
+          {student ? (
+            <div className="p-5 grid grid-cols-2 gap-3 text-sm">
+              <Stat label="School" value={student.school} />
+              <Stat label="Level" value={student.level} />
+              <Stat label="District" value={student.district} />
+              <Stat label="Enrolment year" value={student.enrolmentYear} />
+              <Stat label="UNEB results" value={student.unebResults} />
+              <Stat label="Status" value={<Badge kind={statusKind(student.status)}>{student.status}</Badge>} />
+              <Stat label="Guardian NIN" value={<span className="font-mono">{student.guardianNin}</span>} />
+              <div className="col-span-2">
+                <button onClick={()=>setSection('students')} className="text-xs text-uinr hover:underline flex items-center gap-1">
+                  Open in Students module <ArrowRight size={12} />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="p-5 text-sm text-slate-500 italic">No education record linked to this NIN.</div>
+          )}
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
+            <HeartPulse size={18} className="text-rose-600" />
+            <div>
+              <div className="font-semibold text-slate-900">Health record</div>
+              <div className="text-xs text-slate-500">District-linked facility</div>
+            </div>
+          </div>
+          {facility ? (
+            <div className="p-5 grid grid-cols-2 gap-3 text-sm">
+              <Stat label="Facility" value={facility.name} />
+              <Stat label="Level" value={facility.level} />
+              <Stat label="In-charge" value={facility.inCharge} />
+              <Stat label="Bed capacity" value={facility.beds} />
+              <Stat label="Drug stock" value={<Badge kind={statusKind(facility.stock)}>{facility.stock}</Badge>} />
+              <Stat label="Last inspection" value={facility.lastInspection} />
+              <Stat label="Vaccination coverage" value={`${facility.vacCoverage}%`} />
+              <div className="col-span-2">
+                <button onClick={()=>setSection('hospitals')} className="text-xs text-uinr hover:underline flex items-center gap-1">
+                  Open in Hospitals module <ArrowRight size={12} />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="p-5 text-sm text-slate-500 italic">No facility found for this district.</div>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
+            <Network size={18} className="text-indigo-600" />
+            <div>
+              <div className="font-semibold text-slate-900">Family</div>
+              <div className="text-xs text-slate-500">{family ? `Head: ${family.head}` : 'No family link'}</div>
+            </div>
+          </div>
+          {family ? (
+            <div className="p-5 space-y-3">
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <Stat label="Clan" value={family.clan} />
+                <Stat label="Tribe" value={family.tribe} />
+                <Stat label="Village" value={family.village} />
+                <Stat label="Members" value={family.members} />
+              </div>
+              <div className="border-t pt-3">
+                <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">Linked members</div>
+                <div className="flex flex-wrap gap-2">
+                  {[...family.tree.grandparents, ...family.tree.parents, ...family.tree.children].map((p, i) => (
+                    <button key={i} onClick={()=>openProfile(p)}
+                      className={`text-xs px-2.5 py-1 rounded-full border transition ${p.nin === person.nin ? 'bg-uinr text-white border-uinr' : 'bg-slate-50 hover:bg-uinr/10 text-slate-700 border-slate-200'}`}>
+                      {p.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button onClick={()=>setSection('families')} className="text-xs text-uinr hover:underline flex items-center gap-1">
+                Open in Family Trees <ArrowRight size={12} />
+              </button>
+            </div>
+          ) : (
+            <div className="p-5 text-sm text-slate-500 italic">No family registry entry contains this person.</div>
+          )}
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
+            <Clock size={18} className="text-uinr" />
+            <div>
+              <div className="font-semibold text-slate-900">Audit history</div>
+              <div className="text-xs text-slate-500">Mentions of {person.name}</div>
+            </div>
+          </div>
+          {history.length === 0 ? (
+            <div className="p-5 text-sm text-slate-500 italic">No audit entries reference this person yet.</div>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {history.map(a => (
+                <li key={a.id} className="px-5 py-3 text-sm">
+                  <div className="flex items-center gap-2">
+                    <Badge kind={a.action==='Created' ? 'green' : a.action==='Deleted' ? 'red' : a.action==='Edited' ? 'amber' : 'gray'}>{a.action}</Badge>
+                    <span className="text-slate-600">{a.module}</span>
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">by {a.by} · {a.ts}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Reports module
+   =========================================================== */
+const REPORT_TEMPLATES = [
+  { key:'enrolment', title:'District Enrolment Report',     desc:'Student enrolment, status mix, level distribution by district.', Icon:GraduationCap, color:'sky' },
+  { key:'health',    title:'Health Facility Audit',         desc:'Facility-level inspection, capacity, drug stock and patient visits.', Icon:Hospital, color:'emerald' },
+  { key:'vaccine',   title:'Vaccination Coverage Summary',  desc:'District-level vaccination averages and outliers.', Icon:Syringe, color:'rose' },
+  { key:'family',    title:'Family Registry Snapshot',      desc:'Households per district, clan distribution, citizens linked.', Icon:Users2, color:'indigo' }
+];
+
+function ReportsPage({ state, openReport }) {
+  const palette = {
+    sky:'bg-sky-50 text-sky-700 border-sky-200',
+    emerald:'bg-emerald-50 text-emerald-700 border-emerald-200',
+    rose:'bg-rose-50 text-rose-700 border-rose-200',
+    indigo:'bg-indigo-50 text-indigo-700 border-indigo-200'
+  };
+  return (
+    <div className="space-y-4">
+      <div className="bg-gradient-to-r from-uinr-dark to-uinr-light text-white rounded-2xl p-6 flex flex-col md:flex-row md:items-center gap-3">
+        <div className="flex-1">
+          <div className="text-xs uppercase tracking-wider text-white/70 flex items-center gap-2"><FileText size={14} /> Ministry reports</div>
+          <h2 className="text-2xl font-bold mt-1">Generate printable reports</h2>
+          <p className="text-sm text-white/80 mt-1">All reports use live data from the registry. Print to A4 or export to CSV from any module.</p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {REPORT_TEMPLATES.map(r => {
+          const Icon = r.Icon;
+          return (
+            <button key={r.key} onClick={()=>openReport(r.key)}
+              className="text-left bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md hover:border-uinr/40 transition">
+              <div className={`inline-flex p-2 rounded-lg border ${palette[r.color]}`}><Icon size={18} /></div>
+              <div className="mt-3 font-semibold text-slate-900">{r.title}</div>
+              <div className="text-sm text-slate-600 mt-1">{r.desc}</div>
+              <div className="mt-3 flex items-center gap-2 text-xs text-uinr font-semibold">
+                Generate report <ArrowRight size={12} />
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ReportHeader({ title, subtitle, user, settings }) {
+  return (
+    <div className="border-b-2 border-uinr pb-4 mb-6 flex items-start justify-between">
+      <div className="flex items-center gap-4">
+        <div className="bg-uinr text-white p-3 rounded-lg"><Shield size={28} /></div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-slate-500">Government of Uganda</div>
+          <div className="font-bold text-lg text-slate-900">{settings.sysName}</div>
+          <div className="text-xs text-slate-600">{subtitle}</div>
+        </div>
+      </div>
+      <div className="text-right text-xs text-slate-600">
+        <div className="font-semibold text-slate-800">{title}</div>
+        <div>Generated {new Date().toLocaleString()}</div>
+        <div>By {user.name} ({user.role})</div>
+        <div className="mt-1 inline-block px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-800 text-[10px] rounded-full font-semibold">OFFICIAL · UNCLASSIFIED</div>
+      </div>
+    </div>
+  );
+}
+
+function ReportView({ reportKey, state, user, settings, onClose }) {
+  const tpl = REPORT_TEMPLATES.find(r => r.key === reportKey);
+  if (!tpl) return null;
+
+  const Body = () => {
+    if (reportKey === 'enrolment') {
+      const byDistrict = {};
+      state.students.forEach(s => {
+        if (!byDistrict[s.district]) byDistrict[s.district] = { total:0, enrolled:0, graduated:0, dropouts:0, levels:{} };
+        const d = byDistrict[s.district];
+        d.total += 1;
+        if (s.status === 'Enrolled')   d.enrolled  += 1;
+        if (s.status === 'Graduated')  d.graduated += 1;
+        if (s.status === 'Dropped Out') d.dropouts += 1;
+        d.levels[s.level] = (d.levels[s.level] || 0) + 1;
+      });
+      const rows = Object.entries(byDistrict).sort((a,b)=>b[1].total - a[1].total);
+      return (
+        <>
+          <div className="grid grid-cols-4 gap-3 mb-5">
+            <Stat label="Total students"  value={state.students.length} />
+            <Stat label="Currently enrolled" value={state.students.filter(s=>s.status==='Enrolled').length} />
+            <Stat label="Graduated" value={state.students.filter(s=>s.status==='Graduated').length} />
+            <Stat label="Dropouts" value={state.students.filter(s=>s.status==='Dropped Out').length} />
+          </div>
+          <table className="w-full text-sm border-collapse">
+            <thead><tr className="bg-slate-100 text-left">
+              <th className="px-3 py-2 border border-slate-200">District</th>
+              <th className="px-3 py-2 border border-slate-200">Total</th>
+              <th className="px-3 py-2 border border-slate-200">Enrolled</th>
+              <th className="px-3 py-2 border border-slate-200">Graduated</th>
+              <th className="px-3 py-2 border border-slate-200">Dropouts</th>
+              <th className="px-3 py-2 border border-slate-200">Dominant level</th>
+            </tr></thead>
+            <tbody>
+              {rows.map(([d, v]) => {
+                const dom = Object.entries(v.levels).sort((a,b)=>b[1]-a[1])[0];
+                return (
+                  <tr key={d}>
+                    <td className="px-3 py-2 border border-slate-200 font-medium">{d}</td>
+                    <td className="px-3 py-2 border border-slate-200">{v.total}</td>
+                    <td className="px-3 py-2 border border-slate-200">{v.enrolled}</td>
+                    <td className="px-3 py-2 border border-slate-200">{v.graduated}</td>
+                    <td className="px-3 py-2 border border-slate-200">{v.dropouts}</td>
+                    <td className="px-3 py-2 border border-slate-200">{dom ? `${dom[0]} (${dom[1]})` : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </>
+      );
+    }
+    if (reportKey === 'health') {
+      return (
+        <>
+          <div className="grid grid-cols-4 gap-3 mb-5">
+            <Stat label="Facilities" value={state.hospitals.length} />
+            <Stat label="Total beds"  value={state.hospitals.reduce((a,h)=>a+h.beds,0).toLocaleString()} />
+            <Stat label="Total visits" value={state.hospitals.reduce((a,h)=>a+h.visits,0).toLocaleString()} />
+            <Stat label="Critical stock" value={state.hospitals.filter(h=>h.stock==='Critical').length} />
+          </div>
+          <table className="w-full text-sm border-collapse">
+            <thead><tr className="bg-slate-100 text-left">
+              <th className="px-3 py-2 border border-slate-200">Facility</th>
+              <th className="px-3 py-2 border border-slate-200">Level</th>
+              <th className="px-3 py-2 border border-slate-200">District</th>
+              <th className="px-3 py-2 border border-slate-200">Beds</th>
+              <th className="px-3 py-2 border border-slate-200">Visits</th>
+              <th className="px-3 py-2 border border-slate-200">Stock</th>
+              <th className="px-3 py-2 border border-slate-200">Last inspection</th>
+            </tr></thead>
+            <tbody>
+              {state.hospitals.map(h => (
+                <tr key={h.id}>
+                  <td className="px-3 py-2 border border-slate-200 font-medium">{h.name}</td>
+                  <td className="px-3 py-2 border border-slate-200">{h.level}</td>
+                  <td className="px-3 py-2 border border-slate-200">{h.district}</td>
+                  <td className="px-3 py-2 border border-slate-200">{h.beds}</td>
+                  <td className="px-3 py-2 border border-slate-200">{h.visits.toLocaleString()}</td>
+                  <td className="px-3 py-2 border border-slate-200">{h.stock}</td>
+                  <td className="px-3 py-2 border border-slate-200">{h.lastInspection}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      );
+    }
+    if (reportKey === 'vaccine') {
+      const acc = {};
+      state.hospitals.forEach(h => {
+        if (!acc[h.district]) acc[h.district] = { sum:0, n:0 };
+        acc[h.district].sum += h.vacCoverage; acc[h.district].n += 1;
+      });
+      const rows = Object.entries(acc).map(([d,v]) => ({ d, pct: Math.round(v.sum/v.n), facilities:v.n })).sort((a,b)=>b.pct-a.pct);
+      const nat = Math.round(rows.reduce((a,r)=>a+r.pct, 0) / rows.length);
+      return (
+        <>
+          <div className="grid grid-cols-3 gap-3 mb-5">
+            <Stat label="National average" value={`${nat}%`} />
+            <Stat label="Best district" value={`${rows[0].d} (${rows[0].pct}%)`} />
+            <Stat label="Worst district" value={`${rows[rows.length-1].d} (${rows[rows.length-1].pct}%)`} />
+          </div>
+          <table className="w-full text-sm border-collapse">
+            <thead><tr className="bg-slate-100 text-left">
+              <th className="px-3 py-2 border border-slate-200">District</th>
+              <th className="px-3 py-2 border border-slate-200">Facilities</th>
+              <th className="px-3 py-2 border border-slate-200">Coverage</th>
+              <th className="px-3 py-2 border border-slate-200">Vs national</th>
+              <th className="px-3 py-2 border border-slate-200">Status</th>
+            </tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.d}>
+                  <td className="px-3 py-2 border border-slate-200 font-medium">{r.d}</td>
+                  <td className="px-3 py-2 border border-slate-200">{r.facilities}</td>
+                  <td className="px-3 py-2 border border-slate-200">{r.pct}%</td>
+                  <td className="px-3 py-2 border border-slate-200">{(r.pct - nat) >= 0 ? '+' : ''}{r.pct - nat} pts</td>
+                  <td className="px-3 py-2 border border-slate-200">{r.pct >= 85 ? 'On track' : r.pct >= 75 ? 'Watch' : 'Action required'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      );
+    }
+    if (reportKey === 'family') {
+      const byDist = {};
+      state.families.forEach(f => {
+        if (!byDist[f.district]) byDist[f.district] = { families:0, members:0, clans:new Set() };
+        byDist[f.district].families += 1;
+        byDist[f.district].members  += f.members;
+        byDist[f.district].clans.add(f.clan);
+      });
+      const rows = Object.entries(byDist).map(([d,v]) => ({ d, families:v.families, members:v.members, clans:v.clans.size }));
+      return (
+        <>
+          <div className="grid grid-cols-3 gap-3 mb-5">
+            <Stat label="Families registered" value={state.families.length} />
+            <Stat label="Citizens linked" value={state.families.reduce((a,f)=>a+f.members,0)} />
+            <Stat label="Unique clans" value={new Set(state.families.map(f=>f.clan)).size} />
+          </div>
+          <table className="w-full text-sm border-collapse">
+            <thead><tr className="bg-slate-100 text-left">
+              <th className="px-3 py-2 border border-slate-200">District</th>
+              <th className="px-3 py-2 border border-slate-200">Families</th>
+              <th className="px-3 py-2 border border-slate-200">Members</th>
+              <th className="px-3 py-2 border border-slate-200">Distinct clans</th>
+              <th className="px-3 py-2 border border-slate-200">Avg household</th>
+            </tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.d}>
+                  <td className="px-3 py-2 border border-slate-200 font-medium">{r.d}</td>
+                  <td className="px-3 py-2 border border-slate-200">{r.families}</td>
+                  <td className="px-3 py-2 border border-slate-200">{r.members}</td>
+                  <td className="px-3 py-2 border border-slate-200">{r.clans}</td>
+                  <td className="px-3 py-2 border border-slate-200">{(r.members/r.families).toFixed(1)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <div className="fixed inset-0 z-[900] bg-slate-100 overflow-auto">
+      <div className="no-print bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+        <div className="flex items-center gap-3">
+          <button onClick={onClose} className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900">
+            <ArrowLeft size={16} /> Back to Reports
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>window.print()} className="flex items-center gap-2 px-3 py-2 bg-uinr text-white rounded-lg text-sm hover:bg-uinr-dark">
+            <Printer size={16} /> Print / Save as PDF
+          </button>
+        </div>
+      </div>
+
+      <div className="print-area max-w-4xl mx-auto bg-white shadow-sm my-6 p-8 border border-slate-200 rounded-lg">
+        <ReportHeader title={tpl.title} subtitle={tpl.desc} user={user} settings={settings} />
+        <Body />
+        <div className="mt-8 pt-4 border-t border-slate-200 text-[11px] text-slate-500 flex justify-between">
+          <div>{settings.sysName} · uinr.go.ug</div>
+          <div>Page 1 of 1 · Distribution restricted to authorised officers</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2119,6 +2829,7 @@ const initialState = {
 
 function reducer(state, action) {
   switch (action.type) {
+    case 'SET_ALL':        return { ...state, ...action.payload };
     case 'STUDENT_ADD':    return { ...state, students: [action.payload, ...state.students] };
     case 'STUDENT_UPDATE': return { ...state, students: state.students.map(s => s.id === action.payload.id ? action.payload : s) };
     case 'STUDENT_DELETE': return { ...state, students: state.students.filter(s => s.id !== action.payload) };
@@ -2157,14 +2868,108 @@ export default function App() {
   const [notifOpen, setNotifOpen] = useState(false);
   const [profilePerson, setProfilePerson] = useState(null);
   const [activeReport, setActiveReport] = useState(null);
+  const [dbLoading, setDbLoading] = useState(supabaseConfigured);
+  const [dbError, setDbError] = useState(null);
+  const [seeding, setSeeding] = useState(false);
 
-  // Persist on any change
+  // Persist on any change (only in local mode — DB mode trusts the server)
   useEffect(() => {
+    if (supabaseConfigured) return;
     savePersisted({
       state, settings, user,
       readAlerts: Array.from(readAlerts)
     });
   }, [state, settings, user, readAlerts]);
+
+  // Initial load from Supabase
+  const loadFromDb = useCallback(async () => {
+    if (!supabaseConfigured) return;
+    setDbLoading(true); setDbError(null);
+    try {
+      const data = await loadAll();
+      dispatch({ type:'SET_ALL', payload: {
+        students:  data.students,
+        hospitals: data.hospitals,
+        families:  data.families,
+        audit:     data.audit,
+        admins:    data.admins,
+        sync:      data.sync
+      }});
+      if (data.settings) setSettings(prev => ({ ...prev, ...data.settings }));
+    } catch (e) {
+      setDbError(e.message);
+      push('error', `Database load failed: ${e.message}`);
+    } finally {
+      setDbLoading(false);
+    }
+  }, [push]);
+
+  useEffect(() => {
+    if (supabaseConfigured && user) loadFromDb();
+  }, [user, loadFromDb]);
+
+  // Async dispatcher: intercepts CRUD actions and syncs to Supabase.
+  // Returns a promise. In local mode it generates IDs and dispatches synchronously.
+  const wdispatch = useCallback(async (action) => {
+    if (!supabaseConfigured) {
+      // Local mode — generate IDs for ADD actions
+      if (['STUDENT_ADD','HOSP_ADD','FAM_ADD','USER_ADD','AUDIT_ADD'].includes(action.type) && !action.payload.id) {
+        const idGen = Date.now() + Math.floor(Math.random() * 1000);
+        dispatch({ ...action, payload: { ...action.payload, id: idGen } });
+      } else {
+        dispatch(action);
+      }
+      return;
+    }
+    try {
+      let payload = action.payload;
+      switch (action.type) {
+        case 'STUDENT_ADD':    payload = await api.students.add(action.payload); break;
+        case 'STUDENT_UPDATE': payload = await api.students.update(action.payload.id, action.payload); break;
+        case 'STUDENT_DELETE': await api.students.remove(action.payload); break;
+        case 'HOSP_ADD':       payload = await api.hospitals.add(action.payload); break;
+        case 'HOSP_UPDATE':    payload = await api.hospitals.update(action.payload.id, action.payload); break;
+        case 'HOSP_DELETE':    await api.hospitals.remove(action.payload); break;
+        case 'FAM_ADD':        payload = await api.families.add(action.payload); break;
+        case 'FAM_UPDATE':     payload = await api.families.update(action.payload.id, action.payload); break;
+        case 'FAM_DELETE':     await api.families.remove(action.payload); break;
+        case 'USER_ADD':       payload = await api.admins.add(action.payload); break;
+        case 'USER_UPDATE':    payload = await api.admins.update(action.payload.id, action.payload); break;
+        case 'AUDIT_ADD':      payload = await api.audit.add(action.payload); break;
+        default: break;
+      }
+      dispatch({ ...action, payload });
+    } catch (e) {
+      push('error', `Database error: ${e.message}`);
+      throw e;
+    }
+  }, [push]);
+
+  // Seed demo data into Supabase (idempotent — only if DB empty)
+  const seedDemo = useCallback(async () => {
+    if (!supabaseConfigured) { push('error', 'Connect a database first.'); return; }
+    setSeeding(true);
+    try {
+      const empty = await isEmpty();
+      if (!empty) {
+        push('info', 'Database already has records — refusing to duplicate. Reset first if you want a clean seed.');
+        return;
+      }
+      await seedDemoData({
+        students: INITIAL_STUDENTS,
+        hospitals: INITIAL_HOSPITALS,
+        families: INITIAL_FAMILIES,
+        audit: INITIAL_AUDIT,
+        admins: INITIAL_ADMINS
+      });
+      await loadFromDb();
+      push('success', 'Demo data seeded to database');
+    } catch (e) {
+      push('error', `Seed failed: ${e.message}`);
+    } finally {
+      setSeeding(false);
+    }
+  }, [push, loadFromDb]);
 
   // Keyboard shortcut: Cmd+K / Ctrl+K opens palette
   useEffect(() => {
@@ -2178,7 +2983,19 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const resetDemoData = () => {
+  const resetDemoData = async () => {
+    if (supabaseConfigured) {
+      if (!window.confirm('This wipes every record from the database and re-seeds the demo. Continue?')) return;
+      setSeeding(true);
+      try {
+        await wipeAll();
+        await seedDemo();
+      } catch (e) {
+        push('error', `Reset failed: ${e.message}`);
+        setSeeding(false);
+      }
+      return;
+    }
     clearPersisted();
     window.location.reload();
   };
@@ -2197,14 +3014,12 @@ export default function App() {
 
   const addAudit = useCallback((action, module, record, who) => {
     const ts = new Date().toISOString().replace('T', ' ').slice(0, 16);
-    dispatch({
+    // Fire and forget — audit failures shouldn't block the user
+    wdispatch({
       type: 'AUDIT_ADD',
-      payload: {
-        id: Date.now(), ts, action, module, record,
-        by: who.name, role: who.role, district: who.district
-      }
-    });
-  }, []);
+      payload: { ts, action, module, record, by: who.name, role: who.role, district: who.district }
+    }).catch(() => {});
+  }, [wdispatch]);
 
   if (!user) return (
     <>
@@ -2218,32 +3033,58 @@ export default function App() {
     students:  { title:'Students',           subtitle:'Education records linked by NIN' },
     hospitals: { title:'Hospitals',          subtitle:'Health facilities and capacity' },
     families:  { title:'Family Trees',       subtitle:'Multi-generational household records' },
+    reports:   { title:'Reports',            subtitle:'Ministry-ready printable summaries' },
     audit:     { title:'Audit Log',          subtitle:'Immutable record of every action' },
     roles:     { title:'Roles & Access',     subtitle:'Administrator account management' },
-    settings:  { title:'Settings',           subtitle:'System configuration and account' }
-  }[section];
+    settings:  { title:'Settings',           subtitle:'System configuration and account' },
+    profile:   { title:'Citizen profile',    subtitle:profilePerson ? `${profilePerson.name} · ${profilePerson.nin}` : '' }
+  }[section] || { title:'Overview', subtitle:'' };
 
   return (
     <div className="min-h-screen flex bg-slate-50">
-      <Sidebar section={section} setSection={setSection} user={user}
+      <Sidebar section={section} setSection={(s)=>{ setSection(s); if (s !== 'profile') setProfilePerson(null); }} user={user}
                onLogout={() => { push('info', 'Signed out'); setUser(null); setSection('overview'); }}
                open={sidebarOpen} setOpen={setSidebarOpen} />
       <main className="flex-1 flex flex-col min-w-0">
-        <Topbar title={sectionMeta.title} subtitle={sectionMeta.subtitle} onMenu={()=>setSidebarOpen(true)} user={user} />
+        <Topbar title={sectionMeta.title} subtitle={sectionMeta.subtitle}
+                onMenu={()=>setSidebarOpen(true)} user={user}
+                onOpenPalette={()=>setPaletteOpen(true)}
+                onOpenNotif={()=>setNotifOpen(true)}
+                unreadCount={unreadAlerts.length}
+                dbConnected={supabaseConfigured}
+                dbLoading={dbLoading} />
         <div className="p-4 lg:p-8 flex-1 overflow-auto">
           {section === 'overview'  && <Overview students={state.students} hospitals={state.hospitals} families={state.families} audit={state.audit} sync={state.sync} user={user} setSection={setSection} />}
-          {section === 'students'  && <StudentsPage students={state.students} dispatch={dispatch} user={user} pushToast={push} audit={state.audit} addAudit={addAudit} />}
-          {section === 'hospitals' && <HospitalsPage hospitals={state.hospitals} dispatch={dispatch} user={user} pushToast={push} addAudit={addAudit} />}
-          {section === 'families'  && <FamiliesPage families={state.families} students={state.students} hospitals={state.hospitals} dispatch={dispatch} user={user} pushToast={push} addAudit={addAudit} />}
+          {section === 'students'  && <StudentsPage students={state.students} dispatch={wdispatch} user={user} pushToast={push} audit={state.audit} addAudit={addAudit} openProfile={openProfile} />}
+          {section === 'hospitals' && <HospitalsPage hospitals={state.hospitals} dispatch={wdispatch} user={user} pushToast={push} addAudit={addAudit} />}
+          {section === 'families'  && <FamiliesPage families={state.families} students={state.students} hospitals={state.hospitals} dispatch={wdispatch} user={user} pushToast={push} addAudit={addAudit} openProfile={openProfile} />}
+          {section === 'reports'   && <ReportsPage state={state} openReport={setActiveReport} />}
           {section === 'audit'     && <AuditPage audit={state.audit} user={user} pushToast={push} />}
-          {section === 'roles' && user.role === 'Super Admin' && <RolesPage admins={state.admins} dispatch={dispatch} user={user} pushToast={push} addAudit={addAudit} />}
-          {section === 'settings'  && <SettingsPage settings={settings} setSettings={setSettings} user={user} pushToast={push} students={state.students} hospitals={state.hospitals} families={state.families} audit={state.audit} />}
+          {section === 'roles' && user.role === 'Super Admin' && <RolesPage admins={state.admins} dispatch={wdispatch} user={user} pushToast={push} addAudit={addAudit} />}
+          {section === 'settings'  && <SettingsPage settings={settings} setSettings={setSettings} user={user} pushToast={push} students={state.students} hospitals={state.hospitals} families={state.families} audit={state.audit} resetDemoData={resetDemoData} seedDemo={seedDemo} seeding={seeding} dbConnected={supabaseConfigured} dbError={dbError} />}
+          {section === 'profile' && profilePerson && (
+            <ProfileView person={profilePerson} state={state}
+                         setSection={setSection} openProfile={openProfile}
+                         onBack={()=>setSection('overview')} />
+          )}
         </div>
-        <div className="px-4 lg:px-8 py-3 border-t border-slate-200 bg-white text-xs text-slate-500 flex items-center justify-between">
+        <div className="px-4 lg:px-8 py-3 border-t border-slate-200 bg-white text-xs text-slate-500 flex items-center justify-between no-print">
           <div>© {new Date().getFullYear()} Government of Uganda · UINR v1.0</div>
           <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500" /> All systems operational</div>
         </div>
       </main>
+
+      <CommandPalette open={paletteOpen} onClose={()=>setPaletteOpen(false)}
+                      state={state} setSection={setSection} openProfile={openProfile} user={user} />
+      <NotificationPanel open={notifOpen} onClose={()=>setNotifOpen(false)}
+                         alerts={alerts} readAlerts={readAlerts}
+                         markRead={markRead} markAllRead={markAllRead}
+                         setSection={setSection} audit={state.audit} />
+      {activeReport && (
+        <ReportView reportKey={activeReport} state={state}
+                    user={user} settings={settings}
+                    onClose={()=>setActiveReport(null)} />
+      )}
       <ToastStack toasts={toasts} />
     </div>
   );
