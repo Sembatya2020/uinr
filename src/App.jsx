@@ -5,7 +5,9 @@ import {
   X, ChevronUp, ChevronDown, Download, CheckCircle2, AlertTriangle, Info,
   Menu, Building2, MapPin, Activity, Syringe, UserCog, Eye, Filter, ShieldCheck,
   ShieldAlert, RefreshCcw, Save, Lock, TrendingUp, TrendingDown, BellRing,
-  Sparkles, ArrowRight, School, Stethoscope, BarChart3, Globe2
+  Sparkles, ArrowRight, School, Stethoscope, BarChart3, Globe2,
+  Command, Bell, FileText, Printer, ArrowLeft, BookOpen, HeartPulse, Network,
+  Clock, User as UserIcon, ChevronRight, CheckCheck, RotateCcw
 } from 'lucide-react';
 
 /* ===========================================================
@@ -164,6 +166,55 @@ const INITIAL_ADMINS = [
 ];
 
 const INITIAL_SYNC = DISTRICTS.map((d, i) => ({ district:d, status: i % 4 === 2 ? 'Syncing' : 'Synced', lastSync: `2026-06-05 ${String(7 + (i%6)).padStart(2,'0')}:${String(10 + i*4).padStart(2,'0')}` }));
+
+/* ===========================================================
+   Persistence (localStorage)
+   =========================================================== */
+const STORAGE_KEY = 'uinr:v1';
+function loadPersisted() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function savePersisted(snapshot) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot)); } catch {}
+}
+function clearPersisted() {
+  try { localStorage.removeItem(STORAGE_KEY); } catch {}
+}
+
+/* ===========================================================
+   Alerts computation (used by dashboard + notifications)
+   =========================================================== */
+function computeAlerts(state) {
+  const out = [];
+  state.hospitals.filter(h => h.stock === 'Critical').forEach(h => out.push({
+    id: `critical-${h.id}`, kind:'critical', Icon:Syringe,
+    title:`Critical drug stock — ${h.name}`,
+    detail:`${h.district} · In-charge: ${h.inCharge}`,
+    target:'hospitals', ts: h.lastInspection
+  }));
+  state.hospitals.filter(h => h.stock === 'Low').forEach(h => out.push({
+    id: `low-${h.id}`, kind:'warn', Icon:Stethoscope,
+    title:`Low drug stock — ${h.name}`,
+    detail:`${h.district} · ${h.beds} beds`,
+    target:'hospitals', ts: h.lastInspection
+  }));
+  state.sync.filter(s => s.status === 'Syncing').forEach(s => out.push({
+    id: `sync-${s.district}`, kind:'warn', Icon:RefreshCcw,
+    title:`${s.district} sync in progress`,
+    detail:`Last sync ${s.lastSync}`,
+    target:'overview', ts: s.lastSync
+  }));
+  state.students.filter(s => s.status === 'Dropped Out').forEach(s => out.push({
+    id: `dropout-${s.id}`, kind:'warn', Icon:GraduationCap,
+    title:`Dropout reported — ${s.name}`,
+    detail:`${s.school}, ${s.district}`,
+    target:'students', ts:'—'
+  }));
+  return out;
+}
 
 /* ===========================================================
    Toast system
@@ -1839,4 +1890,361 @@ function AuditPage({ audit, user, pushToast }) {
       </div>
 
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-        <d
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                {[['ts','Timestamp'],['action','Action'],['module','Module'],['record','Record'],['by','Performed By'],['role','Role'],['district','District']].map(([k,l])=>(
+                  <th key={k} onClick={()=>headerClick(k)} className="text-left px-4 py-2.5 font-medium cursor-pointer whitespace-nowrap">{l} <SortIcon k={k} /></th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-slate-500">No matching audit entries.</td></tr>}
+              {sorted.map(a => (
+                <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50">
+                  <td className="px-4 py-2.5 text-slate-700 font-mono text-xs whitespace-nowrap">{a.ts}</td>
+                  <td className="px-4 py-2.5">
+                    <Badge kind={a.action==='Created' ? 'green' : a.action==='Deleted' ? 'red' : a.action==='Edited' ? 'amber' : 'gray'}>{a.action}</Badge>
+                  </td>
+                  <td className="px-4 py-2.5 text-slate-600">{a.module}</td>
+                  <td className="px-4 py-2.5 font-medium text-slate-800">{a.record}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{a.by}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{a.role}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{a.district}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Roles & Access page (Super Admin only)
+   =========================================================== */
+function RolesPage({ admins, dispatch, user, pushToast, addAudit }) {
+  const [editing, setEditing] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [confirmAct, setConfirmAct] = useState(null);
+
+  const handleSave = (rec) => {
+    if (rec.id) { dispatch({ type:'USER_UPDATE', payload: rec }); addAudit('Edited', 'Roles', `User: ${rec.username}`, user); pushToast('success', `Saved ${rec.name}`); }
+    else { const id = Math.max(0, ...admins.map(a=>a.id))+1; dispatch({ type:'USER_ADD', payload: {...rec, id} }); addAudit('Created', 'Roles', `User: ${rec.username}`, user); pushToast('success', `Added ${rec.name}`); }
+    setEditing(null); setAdding(false);
+  };
+
+  const toggle = () => {
+    const u = confirmAct;
+    const next = { ...u, status: u.status === 'Active' ? 'Suspended' : 'Active' };
+    dispatch({ type:'USER_UPDATE', payload: next });
+    addAudit('Edited', 'Roles', `User: ${u.username} → ${next.status}`, user);
+    pushToast('success', `${u.name} is now ${next.status}`);
+    setConfirmAct(null);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <ShieldCheck size={22} className="text-uinr" />
+          <div>
+            <div className="font-semibold text-slate-900">Administrator accounts</div>
+            <div className="text-xs text-slate-500">Manage who can access the registry and at what level</div>
+          </div>
+        </div>
+        <button onClick={()=>setAdding(true)} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-uinr text-white text-sm hover:bg-uinr-dark">
+          <Plus size={16} /> Add User
+        </button>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                {['Name','Username','Role','District','Status','Actions'].map(h =>
+                  <th key={h} className="text-left px-4 py-2.5 font-medium">{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {admins.map(a => (
+                <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50">
+                  <td className="px-4 py-2.5 font-medium text-slate-800">{a.name}</td>
+                  <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{a.username}</td>
+                  <td className="px-4 py-2.5"><Badge kind="blue">{a.role}</Badge></td>
+                  <td className="px-4 py-2.5 text-slate-600">{a.district}</td>
+                  <td className="px-4 py-2.5"><Badge kind={statusKind(a.status)}>{a.status}</Badge></td>
+                  <td className="px-4 py-2.5">
+                    <button onClick={()=>setEditing(a)} className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-uinr hover:bg-sky-50">
+                      <UserCog size={14} /> Edit Role
+                    </button>
+                    <button onClick={()=>setConfirmAct(a)} className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ml-1 ${a.status==='Active' ? 'text-red-600 hover:bg-red-50' : 'text-emerald-700 hover:bg-emerald-50'}`}>
+                      {a.status === 'Active' ? <><ShieldAlert size={14} /> Suspend</> : <><ShieldCheck size={14} /> Activate</>}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5">
+        <div className="font-semibold text-slate-900 mb-3 flex items-center gap-2"><KeyRound size={18} className="text-uinr" /> Role descriptions</div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {Object.entries(ROLE_DESCRIPTIONS).map(([role, desc]) => (
+            <div key={role} className="border border-slate-200 rounded-lg p-4">
+              <Badge kind="blue">{role}</Badge>
+              <p className="text-sm text-slate-700 mt-2 leading-relaxed">{desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <Modal open={!!editing} onClose={()=>setEditing(null)} title={editing ? `Edit User — ${editing.name}` : ''}
+        footer={<>
+          <button onClick={()=>setEditing(null)} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Cancel</button>
+          <button form="user-form" type="submit" className="flex items-center gap-2 px-4 py-2 rounded-lg text-white bg-uinr hover:bg-uinr-dark"><Save size={16} /> Save</button>
+        </>}>
+        {editing && <UserForm initial={editing} onSave={handleSave} />}
+      </Modal>
+
+      <Modal open={adding} onClose={()=>setAdding(false)} title="Add User"
+        footer={<>
+          <button onClick={()=>setAdding(false)} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Cancel</button>
+          <button form="user-form" type="submit" className="flex items-center gap-2 px-4 py-2 rounded-lg text-white bg-uinr hover:bg-uinr-dark"><Plus size={16} /> Add</button>
+        </>}>
+        <UserForm onSave={handleSave} />
+      </Modal>
+
+      <Confirm open={!!confirmAct} onClose={()=>setConfirmAct(null)} onConfirm={toggle}
+        danger={confirmAct?.status === 'Active'}
+        title={confirmAct?.status === 'Active' ? 'Suspend user?' : 'Activate user?'}
+        message={confirmAct ? `${confirmAct.name} will be ${confirmAct.status === 'Active' ? 'suspended' : 'reactivated'}. They will ${confirmAct.status === 'Active' ? 'lose' : 'regain'} access immediately.` : ''} />
+    </div>
+  );
+}
+
+/* ===========================================================
+   Settings page
+   =========================================================== */
+function SettingsPage({ settings, setSettings, user, pushToast, students, hospitals, families, audit }) {
+  const [sysName, setSysName] = useState(settings.sysName);
+  const [adminEmail, setAdminEmail] = useState(settings.adminEmail);
+  const [offlineSync, setOfflineSync] = useState(settings.offlineSync);
+  const [oldPw, setOldPw] = useState(''); const [newPw, setNewPw] = useState(''); const [confirmPw, setConfirmPw] = useState('');
+
+  const saveSys = (e) => {
+    e.preventDefault();
+    setSettings({ ...settings, sysName, adminEmail, offlineSync });
+    pushToast('success', 'System settings saved');
+  };
+  const savePw = (e) => {
+    e.preventDefault();
+    if (newPw !== confirmPw) { pushToast('error', 'Passwords do not match'); return; }
+    if (newPw.length < 8) { pushToast('error', 'Password must be at least 8 characters'); return; }
+    setOldPw(''); setNewPw(''); setConfirmPw('');
+    pushToast('success', 'Password updated');
+  };
+
+  const doExportAll = () => {
+    exportCSV('uinr-students.csv', students, [
+      { key:'name', label:'Name' }, { key:'nin', label:'NIN' }, { key:'school', label:'School' },
+      { key:'district', label:'District' }, { key:'level', label:'Level' }, { key:'enrolmentYear', label:'Year' },
+      { key:'status', label:'Status' }
+    ]);
+    pushToast('success', 'Exported uinr-students.csv');
+  };
+
+  return (
+    <div className="space-y-4 max-w-4xl">
+      <form onSubmit={saveSys} className="bg-white border border-slate-200 rounded-xl shadow-sm">
+        <div className="px-5 py-4 border-b border-slate-200 font-semibold text-slate-900 flex items-center gap-2"><SettingsIcon size={18} className="text-uinr" /> System configuration</div>
+        <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Field label="System Name"><input className={inputCls} value={sysName} onChange={e=>setSysName(e.target.value)} required /></Field>
+          <Field label="Admin Contact Email"><input type="email" className={inputCls} value={adminEmail} onChange={e=>setAdminEmail(e.target.value)} required /></Field>
+          <label className="flex items-center gap-3 mt-2">
+            <input type="checkbox" className="w-4 h-4 accent-uinr" checked={offlineSync} onChange={e=>setOfflineSync(e.target.checked)} />
+            <div>
+              <div className="text-sm font-medium text-slate-800">Enable offline sync</div>
+              <div className="text-xs text-slate-500">Allow district offices to operate offline and sync when connected.</div>
+            </div>
+          </label>
+        </div>
+        <div className="px-5 py-3 border-t border-slate-200 bg-slate-50 rounded-b-xl flex justify-end gap-2">
+          <button type="button" onClick={doExportAll} className="flex items-center gap-2 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-white"><Download size={16} /> Export student data (CSV)</button>
+          <button type="submit" className="flex items-center gap-2 px-4 py-2 rounded-lg bg-uinr text-white text-sm hover:bg-uinr-dark"><Save size={16} /> Save settings</button>
+        </div>
+      </form>
+
+      <form onSubmit={savePw} className="bg-white border border-slate-200 rounded-xl shadow-sm">
+        <div className="px-5 py-4 border-b border-slate-200 font-semibold text-slate-900 flex items-center gap-2"><Lock size={18} className="text-uinr" /> Change password</div>
+        <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Field label="Current Password"><input type="password" className={inputCls} value={oldPw} onChange={e=>setOldPw(e.target.value)} required /></Field>
+          <Field label="New Password"><input type="password" className={inputCls} value={newPw} onChange={e=>setNewPw(e.target.value)} required /></Field>
+          <Field label="Confirm New Password"><input type="password" className={inputCls} value={confirmPw} onChange={e=>setConfirmPw(e.target.value)} required /></Field>
+        </div>
+        <div className="px-5 py-3 border-t border-slate-200 bg-slate-50 rounded-b-xl flex justify-end">
+          <button type="submit" className="flex items-center gap-2 px-4 py-2 rounded-lg bg-uinr text-white text-sm hover:bg-uinr-dark"><Save size={16} /> Update password</button>
+        </div>
+      </form>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 text-sm text-slate-600">
+        <div className="font-semibold text-slate-900 mb-2">System summary</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Stat label="Students" value={students.length} />
+          <Stat label="Hospitals" value={hospitals.length} />
+          <Stat label="Families" value={families.length} />
+          <Stat label="Audit entries" value={audit.length} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   App-level reducer
+   =========================================================== */
+const initialState = {
+  students: INITIAL_STUDENTS,
+  hospitals: INITIAL_HOSPITALS,
+  families: INITIAL_FAMILIES,
+  audit: INITIAL_AUDIT,
+  admins: INITIAL_ADMINS,
+  sync: INITIAL_SYNC
+};
+
+function reducer(state, action) {
+  switch (action.type) {
+    case 'STUDENT_ADD':    return { ...state, students: [action.payload, ...state.students] };
+    case 'STUDENT_UPDATE': return { ...state, students: state.students.map(s => s.id === action.payload.id ? action.payload : s) };
+    case 'STUDENT_DELETE': return { ...state, students: state.students.filter(s => s.id !== action.payload) };
+    case 'HOSP_ADD':       return { ...state, hospitals: [action.payload, ...state.hospitals] };
+    case 'HOSP_UPDATE':    return { ...state, hospitals: state.hospitals.map(h => h.id === action.payload.id ? action.payload : h) };
+    case 'HOSP_DELETE':    return { ...state, hospitals: state.hospitals.filter(h => h.id !== action.payload) };
+    case 'FAM_ADD':        return { ...state, families: [action.payload, ...state.families] };
+    case 'FAM_UPDATE':     return { ...state, families: state.families.map(f => f.id === action.payload.id ? action.payload : f) };
+    case 'FAM_DELETE':     return { ...state, families: state.families.filter(f => f.id !== action.payload) };
+    case 'USER_ADD':       return { ...state, admins: [action.payload, ...state.admins] };
+    case 'USER_UPDATE':    return { ...state, admins: state.admins.map(u => u.id === action.payload.id ? action.payload : u) };
+    case 'AUDIT_ADD':      return { ...state, audit: [action.payload, ...state.audit] };
+    default: return state;
+  }
+}
+
+/* ===========================================================
+   Root App
+   =========================================================== */
+const DEFAULT_SETTINGS = {
+  sysName: 'Uganda Integrated National Registry',
+  adminEmail: 'admin@uinr.go.ug',
+  offlineSync: true
+};
+
+export default function App() {
+  const persisted = useMemo(() => loadPersisted(), []);
+  const { toasts, push } = useToasts();
+  const [user, setUser] = useState(persisted?.user ?? null);
+  const [section, setSection] = useState('overview');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [state, dispatch] = useReducer(reducer, persisted?.state ?? initialState);
+  const [settings, setSettings] = useState(persisted?.settings ?? DEFAULT_SETTINGS);
+  const [readAlerts, setReadAlerts] = useState(() => new Set(persisted?.readAlerts ?? []));
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [profilePerson, setProfilePerson] = useState(null);
+  const [activeReport, setActiveReport] = useState(null);
+
+  // Persist on any change
+  useEffect(() => {
+    savePersisted({
+      state, settings, user,
+      readAlerts: Array.from(readAlerts)
+    });
+  }, [state, settings, user, readAlerts]);
+
+  // Keyboard shortcut: Cmd+K / Ctrl+K opens palette
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen(o => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const resetDemoData = () => {
+    clearPersisted();
+    window.location.reload();
+  };
+
+  const openProfile = (person) => {
+    setProfilePerson(person);
+    setSection('profile');
+    setPaletteOpen(false);
+    setNotifOpen(false);
+  };
+
+  const alerts = useMemo(() => computeAlerts(state), [state]);
+  const unreadAlerts = alerts.filter(a => !readAlerts.has(a.id));
+  const markRead = (id) => setReadAlerts(s => { const n = new Set(s); n.add(id); return n; });
+  const markAllRead = () => setReadAlerts(new Set(alerts.map(a => a.id)));
+
+  const addAudit = useCallback((action, module, record, who) => {
+    const ts = new Date().toISOString().replace('T', ' ').slice(0, 16);
+    dispatch({
+      type: 'AUDIT_ADD',
+      payload: {
+        id: Date.now(), ts, action, module, record,
+        by: who.name, role: who.role, district: who.district
+      }
+    });
+  }, []);
+
+  if (!user) return (
+    <>
+      <LoginScreen onLogin={setUser} pushToast={push} />
+      <ToastStack toasts={toasts} />
+    </>
+  );
+
+  const sectionMeta = {
+    overview:  { title:'Overview',           subtitle:'National registry at a glance' },
+    students:  { title:'Students',           subtitle:'Education records linked by NIN' },
+    hospitals: { title:'Hospitals',          subtitle:'Health facilities and capacity' },
+    families:  { title:'Family Trees',       subtitle:'Multi-generational household records' },
+    audit:     { title:'Audit Log',          subtitle:'Immutable record of every action' },
+    roles:     { title:'Roles & Access',     subtitle:'Administrator account management' },
+    settings:  { title:'Settings',           subtitle:'System configuration and account' }
+  }[section];
+
+  return (
+    <div className="min-h-screen flex bg-slate-50">
+      <Sidebar section={section} setSection={setSection} user={user}
+               onLogout={() => { push('info', 'Signed out'); setUser(null); setSection('overview'); }}
+               open={sidebarOpen} setOpen={setSidebarOpen} />
+      <main className="flex-1 flex flex-col min-w-0">
+        <Topbar title={sectionMeta.title} subtitle={sectionMeta.subtitle} onMenu={()=>setSidebarOpen(true)} user={user} />
+        <div className="p-4 lg:p-8 flex-1 overflow-auto">
+          {section === 'overview'  && <Overview students={state.students} hospitals={state.hospitals} families={state.families} audit={state.audit} sync={state.sync} user={user} setSection={setSection} />}
+          {section === 'students'  && <StudentsPage students={state.students} dispatch={dispatch} user={user} pushToast={push} audit={state.audit} addAudit={addAudit} />}
+          {section === 'hospitals' && <HospitalsPage hospitals={state.hospitals} dispatch={dispatch} user={user} pushToast={push} addAudit={addAudit} />}
+          {section === 'families'  && <FamiliesPage families={state.families} students={state.students} hospitals={state.hospitals} dispatch={dispatch} user={user} pushToast={push} addAudit={addAudit} />}
+          {section === 'audit'     && <AuditPage audit={state.audit} user={user} pushToast={push} />}
+          {section === 'roles' && user.role === 'Super Admin' && <RolesPage admins={state.admins} dispatch={dispatch} user={user} pushToast={push} addAudit={addAudit} />}
+          {section === 'settings'  && <SettingsPage settings={settings} setSettings={setSettings} user={user} pushToast={push} students={state.students} hospitals={state.hospitals} families={state.families} audit={state.audit} />}
+        </div>
+        <div className="px-4 lg:px-8 py-3 border-t border-slate-200 bg-white text-xs text-slate-500 flex items-center justify-between">
+          <div>© {new Date().getFullYear()} Government of Uganda · UINR v1.0</div>
+          <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500" /> All systems operational</div>
+        </div>
+      </main>
+      <ToastStack toasts={toasts} />
+    </div>
+  );
+}
