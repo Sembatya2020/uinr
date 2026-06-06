@@ -7,12 +7,14 @@ const mapStudent = {
   fromDb: (r) => ({
     id: r.id, name: r.name, nin: r.nin, school: r.school, district: r.district,
     level: r.level, enrolmentYear: r.enrolment_year, unebResults: r.uneb_results,
-    status: r.status, guardianNin: r.guardian_nin
+    status: r.status, guardianNin: r.guardian_nin,
+    bursaryEligible: !!r.bursary_eligible, specialNeeds: !!r.special_needs
   }),
   toDb: (s) => ({
     name: s.name, nin: s.nin, school: s.school, district: s.district, level: s.level,
     enrolment_year: s.enrolmentYear, uneb_results: s.unebResults,
-    status: s.status, guardian_nin: s.guardianNin
+    status: s.status, guardian_nin: s.guardianNin,
+    bursary_eligible: !!s.bursaryEligible, special_needs: !!s.specialNeeds
   })
 };
 
@@ -20,12 +22,21 @@ const mapHospital = {
   fromDb: (r) => ({
     id: r.id, name: r.name, level: r.level, district: r.district, inCharge: r.in_charge,
     beds: r.beds, stock: r.stock, lastInspection: r.last_inspection,
-    visits: r.visits, vacCoverage: r.vac_coverage
+    visits: r.visits, vacCoverage: r.vac_coverage, activePatients: r.active_patients || 0
   }),
   toDb: (h) => ({
     name: h.name, level: h.level, district: h.district, in_charge: h.inCharge,
     beds: h.beds, stock: h.stock, last_inspection: h.lastInspection,
-    visits: h.visits, vac_coverage: h.vacCoverage
+    visits: h.visits, vac_coverage: h.vacCoverage, active_patients: h.activePatients
+  })
+};
+
+const mapBilling = {
+  fromDb: (r) => ({
+    id: r.id,
+    date: r.date ? r.date.slice(0,10) : '',
+    plan: r.plan, amount: r.amount_ugx, status: r.status,
+    method: r.method, reference: r.reference
   })
 };
 
@@ -66,8 +77,16 @@ const mapSync = {
 };
 
 const mapSettings = {
-  fromDb: (r) => ({ sysName: r.sys_name, adminEmail: r.admin_email, offlineSync: r.offline_sync }),
-  toDb:   (s) => ({ sys_name: s.sysName, admin_email: s.adminEmail, offline_sync: s.offlineSync })
+  fromDb: (r) => ({
+    sysName: r.sys_name, adminEmail: r.admin_email, offlineSync: r.offline_sync,
+    organizationName: r.organization_name || 'UINR Demo Ministry',
+    plan: r.plan || 'District',
+    planRenewsAt: r.plan_renews_at
+  }),
+  toDb: (s) => ({
+    sys_name: s.sysName, admin_email: s.adminEmail, offline_sync: s.offlineSync,
+    organization_name: s.organizationName, plan: s.plan, plan_renews_at: s.planRenewsAt
+  })
 };
 
 /* ============================================================
@@ -75,6 +94,23 @@ const mapSettings = {
    ============================================================ */
 function need() {
   if (!isConfigured) throw new Error('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env.');
+}
+
+/* ============================================================
+   Schools
+   ============================================================ */
+export async function loadSchools() {
+  if (!isConfigured) return [];
+  const { data, error } = await supabase
+    .from('schools')
+    .select('id, name, district, level, ownership')
+    .order('name');
+  if (error) {
+    // Table might not exist yet (v3 migration not run) — silently degrade
+    if (/relation .* does not exist/i.test(error.message)) return [];
+    throw new Error(error.message);
+  }
+  return data || [];
 }
 
 /* ============================================================
@@ -92,14 +128,15 @@ export async function ping() {
    ============================================================ */
 export async function loadAll() {
   need();
-  const [students, hospitals, families, audit, admins, sync, settings] = await Promise.all([
+  const [students, hospitals, families, audit, admins, sync, settings, billing] = await Promise.all([
     supabase.from('students').select('*').order('name'),
     supabase.from('hospitals').select('*').order('name'),
     supabase.from('families').select('*').order('head'),
     supabase.from('audit_log').select('*').order('ts', { ascending:false }).limit(200),
     supabase.from('admins').select('*').order('name'),
     supabase.from('sync_status').select('*').order('district'),
-    supabase.from('settings').select('*').eq('id', 1).single()
+    supabase.from('settings').select('*').eq('id', 1).single(),
+    supabase.from('billing_history').select('*').order('date', { ascending:false })
   ]);
   const oops = [students, hospitals, families, audit, admins, sync, settings].find(r => r.error);
   if (oops) throw new Error(oops.error.message);
@@ -111,7 +148,8 @@ export async function loadAll() {
     audit:     audit.data.map(mapAudit.fromDb),
     admins:    admins.data.map(mapAdmin.fromDb),
     sync:      sync.data.map(mapSync.fromDb),
-    settings:  settings.data ? mapSettings.fromDb(settings.data) : null
+    settings:  settings.data ? mapSettings.fromDb(settings.data) : null,
+    billing:   billing.error ? [] : (billing.data || []).map(mapBilling.fromDb)
   };
 }
 
