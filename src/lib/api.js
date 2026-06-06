@@ -5,16 +5,21 @@ import { supabase, isConfigured } from './supabase';
    ============================================================ */
 const mapStudent = {
   fromDb: (r) => ({
-    id: r.id, name: r.name, nin: r.nin, school: r.school, district: r.district,
+    id: r.id, name: r.name, nin: r.nin || '', school: r.school, district: r.district,
     level: r.level, enrolmentYear: r.enrolment_year, unebResults: r.uneb_results,
-    status: r.status, guardianNin: r.guardian_nin,
-    bursaryEligible: !!r.bursary_eligible, specialNeeds: !!r.special_needs
+    status: r.status, guardianNin: r.guardian_nin || '',
+    bursaryEligible: !!r.bursary_eligible, specialNeeds: !!r.special_needs,
+    religion: r.religion || ''
   }),
   toDb: (s) => ({
-    name: s.name, nin: s.nin, school: s.school, district: s.district, level: s.level,
+    name: s.name,
+    nin: s.nin ? s.nin : null,
+    school: s.school, district: s.district, level: s.level,
     enrolment_year: s.enrolmentYear, uneb_results: s.unebResults,
-    status: s.status, guardian_nin: s.guardianNin,
-    bursary_eligible: !!s.bursaryEligible, special_needs: !!s.specialNeeds
+    status: s.status,
+    guardian_nin: s.guardianNin ? s.guardianNin : null,
+    bursary_eligible: !!s.bursaryEligible, special_needs: !!s.specialNeeds,
+    religion: s.religion || null
   })
 };
 
@@ -42,13 +47,15 @@ const mapBilling = {
 
 const mapFamily = {
   fromDb: (r) => ({
-    id: r.id, head: r.head, nin: r.nin, clan: r.clan, tribe: r.tribe,
+    id: r.id, head: r.head, nin: r.nin || '', clan: r.clan, tribe: r.tribe,
     village: r.village, district: r.district, members: r.members,
-    marriage: r.marriage, tree: r.tree || { grandparents:[], parents:[], children:[] }
+    marriage: r.marriage, tree: r.tree || { grandparents:[], parents:[], children:[] },
+    religion: r.religion || ''
   }),
   toDb: (f) => ({
-    head: f.head, nin: f.nin, clan: f.clan, tribe: f.tribe, village: f.village,
-    district: f.district, members: f.members, marriage: f.marriage, tree: f.tree
+    head: f.head, nin: f.nin ? f.nin : null, clan: f.clan, tribe: f.tribe, village: f.village,
+    district: f.district, members: f.members, marriage: f.marriage, tree: f.tree,
+    religion: f.religion || null
   })
 };
 
@@ -99,6 +106,17 @@ function need() {
 /* ============================================================
    Schools
    ============================================================ */
+export async function addSchoolIfNew({ name, district, level }) {
+  if (!isConfigured || !name?.trim() || !district) return;
+  try {
+    await supabase.from('schools').insert({
+      name: name.trim(), district, level: level || 'Primary', ownership: 'Government'
+    });
+  } catch {
+    /* silently ignore — schools table may not exist yet, or duplicate */
+  }
+}
+
 export async function loadSchools() {
   if (!isConfigured) return [];
   const { data, error } = await supabase

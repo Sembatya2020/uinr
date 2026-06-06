@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo, useReducer, useCallback, useRef } from 'react';
 import { isConfigured as supabaseConfigured } from './lib/supabase';
-import { api, loadAll, seedDemoData, isEmpty, wipeAll, loadSchools } from './lib/api';
+import { api, loadAll, seedDemoData, isEmpty, wipeAll, loadSchools, addSchoolIfNew } from './lib/api';
 import { signInWithEmail, signOut as authSignOut, restoreSession, onAuthChange,
-         signUpOrganization, sendResetEmail, updatePassword } from './lib/auth';
+         signUpOrganization, sendResetEmail, updatePassword, resendConfirmation } from './lib/auth';
 import {
   Shield, LogIn, LayoutDashboard, GraduationCap, Hospital, Users2, FileClock,
   KeyRound, Settings as SettingsIcon, LogOut, Search, Plus, Pencil, Trash2,
@@ -45,6 +45,10 @@ const FACILITY_LEVELS = ['HC II','HC III','General Hospital','Regional Referral'
 const STOCK_STATUSES = ['Adequate','Low','Critical'];
 const CLANS = ['Nkima','Ngabi','Ffumbe','Nte','Ngo','Ngonge','Mamba','Ngeye'];
 const TRIBES = ['Baganda','Acholi','Banyankole','Basoga','Bagisu','Langi','Lugbara','Banyoro','Batoro'];
+const RELIGIONS = [
+  'Catholic','Anglican (Church of Uganda)','Pentecostal / Born Again','Muslim',
+  'Seventh-Day Adventist','Orthodox','Other Christian','Hindu','Traditional','None / Prefer not to say'
+];
 const ORG_TYPES = ['Ministry','District Office','NGO','Hospital','School'];
 
 const PLANS = [
@@ -81,6 +85,13 @@ const PLANS = [
 ];
 
 const fmtUGX = (n) => n === 0 ? 'Free' : `UGX ${Number(n).toLocaleString()}`;
+const fmtNum = (n) => {
+  if (n == null) return '0';
+  const v = Number(n);
+  if (v >= 1_000_000) return (v/1_000_000).toFixed(v >= 10_000_000 ? 0 : 1).replace(/\.0$/, '') + 'M';
+  if (v >= 1_000)     return (v/1_000).toFixed(v >= 10_000 ? 0 : 1).replace(/\.0$/, '') + 'K';
+  return v.toLocaleString();
+};
 
 const USERS = [
   { username: 'admin',     password: 'uinr2024', role: 'Super Admin',        name: 'Florence Akello',  district: 'Kampala' },
@@ -424,9 +435,12 @@ function LoginScreen({ onLogin, pushToast, goSignup, goLanding }) {
   const [forgotLoading, setForgotLoading] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
 
+  const [unconfirmed, setUnconfirmed] = useState(false);
+
   const submit = async (e) => {
     e.preventDefault();
     setError('');
+    setUnconfirmed(false);
     setLoading(true);
     try {
       if (dbMode) {
@@ -441,10 +455,24 @@ function LoginScreen({ onLogin, pushToast, goSignup, goLanding }) {
         onLogin(found);
       }
     } catch (err) {
-      setError(err.message);
+      const msg = err.message || 'Login failed';
+      const friendly = /invalid login credentials/i.test(msg) ? 'Wrong email or password. Please try again.'
+                     : /email not confirmed/i.test(msg) ? "We sent a confirmation link to your email. Open it to activate your account, then come back here."
+                     : msg;
+      setError(friendly);
+      if (/email not confirmed/i.test(msg)) setUnconfirmed(true);
       pushToast('error', 'Login failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const resend = async () => {
+    try {
+      await resendConfirmation(email.trim());
+      pushToast('success', 'Confirmation link resent — check your inbox');
+    } catch (err) {
+      pushToast('error', err.message);
     }
   };
 
@@ -570,7 +598,15 @@ function LoginScreen({ onLogin, pushToast, goSignup, goLanding }) {
           {error && !forgotOpen && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-800 rounded-lg text-sm flex items-start gap-2">
               <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-              <span>{error}</span>
+              <div className="flex-1">
+                <div>{error}</div>
+                {unconfirmed && (
+                  <button type="button" onClick={resend}
+                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-red-700 hover:text-red-900 underline">
+                    <Send size={12} /> Resend confirmation link
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -663,51 +699,77 @@ function LoginScreen({ onLogin, pushToast, goSignup, goLanding }) {
    Sidebar
    =========================================================== */
 function Sidebar({ section, setSection, user, onLogout, open, setOpen }) {
-  const items = [
-    { key:'overview',  label:'Overview',       Icon:LayoutDashboard },
-    { key:'students',  label:'Students',       Icon:GraduationCap },
-    { key:'hospitals', label:'Hospitals',      Icon:Hospital },
-    { key:'families',  label:'Family Trees',   Icon:Users2 },
-    { key:'reports',   label:'Reports',        Icon:FileText },
-    { key:'audit',     label:'Audit Log',      Icon:FileClock },
-    { key:'roles',     label:'User Management',Icon:KeyRound, superAdminOnly:true },
-    { key:'billing',   label:'Billing',        Icon:CreditCard, superAdminOnly:true },
-    { key:'settings',  label:'Settings',       Icon:SettingsIcon }
+  const sections = [
+    { group:'Workspace', items:[
+      { key:'overview',  label:'Overview',     Icon:LayoutDashboard }
+    ]},
+    { group:'Records', items:[
+      { key:'students',  label:'Students',     Icon:GraduationCap },
+      { key:'hospitals', label:'Hospitals',    Icon:Hospital },
+      { key:'families',  label:'Family Trees', Icon:Users2 }
+    ]},
+    { group:'Insights', items:[
+      { key:'reports',   label:'Reports',      Icon:FileText },
+      { key:'audit',     label:'Audit Log',    Icon:FileClock }
+    ]},
+    { group:'Administration', items:[
+      { key:'roles',     label:'User Management', Icon:KeyRound,    superAdminOnly:true },
+      { key:'billing',   label:'Billing',         Icon:CreditCard,  superAdminOnly:true },
+      { key:'settings',  label:'Settings',        Icon:SettingsIcon }
+    ]}
   ];
-  const visible = items.filter(i => !i.superAdminOnly || user.role === 'Super Admin');
+  const initials = user.name.split(' ').map(s=>s[0]).slice(0,2).join('').toUpperCase();
 
   return (
     <>
       {open && <div className="fixed inset-0 bg-black/40 z-30 lg:hidden no-print" onClick={()=>setOpen(false)} />}
-      <aside className={`fixed lg:static z-40 inset-y-0 left-0 w-64 bg-uinr text-white flex flex-col transition-transform no-print ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+      <aside className={`fixed lg:static z-40 inset-y-0 left-0 w-64 bg-gradient-to-b from-uinr-dark to-uinr text-white flex flex-col transition-transform no-print ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
         <div className="px-5 py-5 border-b border-white/10 flex items-center gap-3">
-          <div className="bg-white/15 p-2 rounded-lg"><Shield size={22} /></div>
+          <div className="bg-white/15 backdrop-blur p-2 rounded-xl shadow-inner"><Shield size={22} /></div>
           <div>
-            <div className="font-bold tracking-tight">UINR</div>
-            <div className="text-xs text-white/70">National Registry</div>
+            <div className="font-bold tracking-tight text-[15px]">UINR</div>
+            <div className="text-[10px] text-white/60 uppercase tracking-widest">National Registry</div>
           </div>
         </div>
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {visible.map(({key,label,Icon}) => (
-            <button key={key}
-              onClick={() => { setSection(key); setOpen(false); }}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
-                section === key ? 'bg-white text-uinr shadow' : 'text-white/85 hover:bg-white/10'
-              }`}>
-              <Icon size={18} />
-              {label}
-            </button>
-          ))}
+        <nav className="flex-1 p-3 overflow-y-auto">
+          {sections.map(group => {
+            const items = group.items.filter(i => !i.superAdminOnly || user.role === 'Super Admin');
+            if (!items.length) return null;
+            return (
+              <div key={group.group} className="mb-4">
+                <div className="px-3 mb-1.5 text-[10px] font-bold uppercase tracking-widest text-white/40">{group.group}</div>
+                <div className="space-y-0.5">
+                  {items.map(({key,label,Icon}) => (
+                    <button key={key}
+                      onClick={() => { setSection(key); setOpen(false); }}
+                      className={`group w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                        section === key
+                          ? 'bg-white text-uinr shadow-lg shadow-black/10'
+                          : 'text-white/80 hover:bg-white/10 hover:text-white'
+                      }`}>
+                      <Icon size={16} className={section === key ? '' : 'opacity-80 group-hover:opacity-100'} />
+                      <span className="flex-1 text-left">{label}</span>
+                      {section === key && <ChevronRight size={14} className="text-uinr/40" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </nav>
         <div className="p-3 border-t border-white/10">
-          <div className="px-3 py-2 text-xs text-white/70 mb-1">Signed in as</div>
-          <div className="px-3 mb-3">
-            <div className="font-semibold">{user.name}</div>
-            <div className="text-xs text-white/70">{user.role} · {user.district}</div>
+          <div className="flex items-center gap-3 px-2 py-2 mb-2">
+            <div className="w-9 h-9 bg-gradient-to-br from-amber-300 to-amber-500 text-uinr-dark rounded-full flex items-center justify-center font-bold text-sm shadow-md">
+              {initials}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold text-sm truncate">{user.name}</div>
+              <div className="text-[10px] text-white/60 truncate">{user.role} · {user.district}</div>
+            </div>
           </div>
           <button onClick={onLogout}
-            className="w-full flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-sm py-2 rounded-lg">
-            <LogOut size={16} /> Sign out
+            className="w-full flex items-center justify-center gap-2 bg-white/5 hover:bg-white/15 border border-white/10 text-sm py-2 rounded-lg transition">
+            <LogOut size={14} /> Sign out
           </button>
         </div>
       </aside>
@@ -773,65 +835,115 @@ function Topbar({ title, subtitle, onMenu, user, onOpenPalette, onOpenNotif, unr
 /* ===========================================================
    Dashboard chart primitives (inline SVG)
    =========================================================== */
-function AreaChart({ data, color='#1a3a5c', height=180 }) {
-  const w = 480;
+function AreaChart({ data, color='#1a3a5c', height=240 }) {
+  const w = 640;
   const max = Math.max(...data.map(d=>d.y), 1);
-  const padX = 36, padTop = 24, padBot = 26;
-  const innerW = w - padX*2, innerH = height - padTop - padBot;
+  const niceMax = Math.ceil(max * 1.15 / 10) * 10 || 10;
+  const padLeft = 48, padRight = 24, padTop = 24, padBot = 32;
+  const innerW = w - padLeft - padRight, innerH = height - padTop - padBot;
   const stepX = data.length > 1 ? innerW / (data.length - 1) : innerW;
   const pts = data.map((d, i) => ({
-    x: padX + i*stepX,
-    y: padTop + innerH - (d.y/max)*innerH
+    x: padLeft + i*stepX,
+    y: padTop + innerH - (d.y/niceMax)*innerH,
+    v: d.y, l: d.x
   }));
-  const line = pts.map((p, i) => `${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-  const area = pts.length ? `${line} L${pts[pts.length-1].x},${padTop+innerH} L${pts[0].x},${padTop+innerH} Z` : '';
+  // Smooth Catmull-Rom -> bezier
+  const smooth = (points) => {
+    if (points.length < 2) return '';
+    let d = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[i - 1] || points[i];
+      const p1 = points[i];
+      const p2 = points[i + 1];
+      const p3 = points[i + 2] || p2;
+      const cp1x = p1.x + (p2.x - p0.x) / 6;
+      const cp1y = p1.y + (p2.y - p0.y) / 6;
+      const cp2x = p2.x - (p3.x - p1.x) / 6;
+      const cp2y = p2.y - (p3.y - p1.y) / 6;
+      d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+    }
+    return d;
+  };
+  const line = smooth(pts);
+  const area = pts.length ? `${line} L ${pts[pts.length-1].x} ${padTop+innerH} L ${pts[0].x} ${padTop+innerH} Z` : '';
   const gid = useMemo(() => 'g-' + Math.random().toString(36).slice(2, 8), []);
+  const [hover, setHover] = useState(null);
+  const yTicks = 4;
+  const ticks = Array.from({ length: yTicks + 1 }, (_, i) => Math.round(niceMax * (yTicks - i) / yTicks));
   return (
-    <svg viewBox={`0 0 ${w} ${height}`} className="w-full">
+    <svg viewBox={`0 0 ${w} ${height}`} className="w-full" preserveAspectRatio="xMidYMid meet">
       <defs>
         <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%"  stopColor={color} stopOpacity="0.32" />
+          <stop offset="0%"  stopColor={color} stopOpacity="0.38" />
+          <stop offset="55%" stopColor={color} stopOpacity="0.10" />
           <stop offset="100%" stopColor={color} stopOpacity="0" />
         </linearGradient>
       </defs>
-      {[0,0.25,0.5,0.75,1].map((t,i) => (
-        <line key={i} x1={padX} y1={padTop+innerH*t} x2={w-padX} y2={padTop+innerH*t} stroke="#e2e8f0" strokeDasharray="3,4" />
-      ))}
+      {/* Y-axis labels + grid */}
+      {ticks.map((tval, i) => {
+        const y = padTop + (innerH * i / yTicks);
+        return (
+          <g key={i}>
+            <line x1={padLeft} y1={y} x2={w-padRight} y2={y} stroke="#e2e8f0" strokeDasharray={i === yTicks ? '0' : '3,4'} />
+            <text x={padLeft - 8} y={y + 3} textAnchor="end" fontSize="10" fill="#94a3b8">{fmtNum(tval)}</text>
+          </g>
+        );
+      })}
+      {/* Area */}
       <path d={area} fill={`url(#${gid})`} />
       <path d={line} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+      {/* Points */}
       {pts.map((p, i) => (
-        <g key={i}>
-          <circle cx={p.x} cy={p.y} r="4" fill="white" stroke={color} strokeWidth="2" />
-          <text x={p.x} y={height-8} textAnchor="middle" fontSize="11" fill="#64748b">{data[i].x}</text>
-          <text x={p.x} y={p.y-10} textAnchor="middle" fontSize="11" fontWeight="700" fill={color}>{data[i].y}</text>
+        <g key={i} onMouseEnter={()=>setHover(i)} onMouseLeave={()=>setHover(null)} style={{ cursor: 'pointer' }}>
+          <circle cx={p.x} cy={padTop + innerH + 24} r="16" fill="transparent" />
+          <circle cx={p.x} cy={p.y} r={hover === i ? 6 : 4} fill="white" stroke={color} strokeWidth={hover === i ? 3 : 2.5} style={{ transition: 'r 0.15s' }} />
+          <text x={p.x} y={padTop + innerH + 22} textAnchor="middle" fontSize="11" fill={hover === i ? '#0f172a' : '#64748b'} fontWeight={hover === i ? '700' : '500'}>{p.l}</text>
         </g>
       ))}
+      {/* Hover tooltip */}
+      {hover !== null && (
+        <g>
+          <rect x={pts[hover].x - 30} y={pts[hover].y - 36} width="60" height="26" rx="6" fill={color} />
+          <text x={pts[hover].x} y={pts[hover].y - 18} textAnchor="middle" fontSize="13" fontWeight="700" fill="white">{fmtNum(pts[hover].v)}</text>
+        </g>
+      )}
     </svg>
   );
 }
 
-function HBarChart({ data, color='#1a3a5c', valueSuffix='' }) {
-  const max = Math.max(...data.map(d=>d.value), 1);
+function HBarChart({ data, color='#1a3a5c', valueSuffix='', max: maxOverride }) {
+  const max = maxOverride ?? Math.max(...data.map(d=>d.value), 1);
   return (
-    <div className="space-y-2.5">
-      {data.map(d => (
-        <div key={d.label}>
-          <div className="flex justify-between text-xs mb-1">
-            <span className="font-medium text-slate-700">{d.label}</span>
-            <span className="text-slate-500 font-semibold">{d.value}{valueSuffix}</span>
+    <div className="space-y-3">
+      {data.map((d, i) => {
+        const pct = (d.value / max) * 100;
+        const c = typeof color === 'function' ? color(d) : color;
+        return (
+          <div key={d.label} className="group">
+            <div className="flex items-center justify-between text-xs mb-1.5">
+              <span className="font-semibold text-slate-700 flex items-center gap-2">
+                <span className="text-slate-400 text-[10px] font-mono">{String(i+1).padStart(2,'0')}</span>
+                {d.label}
+              </span>
+              <span className="text-slate-900 font-bold tabular-nums">{fmtNum(d.value)}{valueSuffix}</span>
+            </div>
+            <div className="h-2 bg-slate-100 rounded-full overflow-hidden relative">
+              <div className="h-full rounded-full transition-all duration-500 group-hover:brightness-110"
+                style={{
+                  width: `${pct}%`,
+                  background: `linear-gradient(90deg, ${c}, ${c}dd)`
+                }} />
+            </div>
           </div>
-          <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-            <div className="h-full rounded-full transition-all" style={{ width:`${(d.value/max)*100}%`, background: typeof color==='function' ? color(d) : color }} />
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
-function Donut({ data, size=170 }) {
+function Donut({ data, size=200, centerLabel='FACILITIES' }) {
   const total = data.reduce((a,b)=>a+b.value, 0);
-  const r = 62, cx = size/2, cy = size/2;
+  const r = 78, cx = size/2, cy = size/2;
   let acc = 0;
   const segs = total === 0 ? [] : data.map(d => {
     const start = (acc/total) * 2*Math.PI - Math.PI/2;
@@ -840,26 +952,37 @@ function Donut({ data, size=170 }) {
     const large = end - start > Math.PI ? 1 : 0;
     const x1 = cx + r*Math.cos(start), y1 = cy + r*Math.sin(start);
     const x2 = cx + r*Math.cos(end),   y2 = cy + r*Math.sin(end);
-    return { path:`M${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r} 0 ${large} 1 ${x2.toFixed(2)},${y2.toFixed(2)}`, ...d };
+    return { path:`M${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r} 0 ${large} 1 ${x2.toFixed(2)},${y2.toFixed(2)}`, pct: total ? Math.round(d.value/total*100) : 0, ...d };
   });
   return (
-    <div className="flex items-center gap-5">
-      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} className="shrink-0">
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#f1f5f9" strokeWidth="22" />
-        {segs.map((s,i)=> <path key={i} d={s.path} stroke={s.color} strokeWidth="22" fill="none" strokeLinecap="butt" />)}
-        <text x={cx} y={cy-4} textAnchor="middle" fontSize="22" fontWeight="700" fill="#1a3a5c">{total}</text>
-        <text x={cx} y={cy+14} textAnchor="middle" fontSize="9" fill="#64748b" letterSpacing="1">FACILITIES</text>
-      </svg>
-      <ul className="space-y-2 text-sm flex-1">
-        {data.map(d => (
-          <li key={d.label} className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-sm" style={{background:d.color}} />
-              <span className="font-medium text-slate-700">{d.label}</span>
-            </span>
-            <span className="text-slate-500 font-semibold">{d.value}</span>
-          </li>
+    <div className="flex flex-col sm:flex-row items-center gap-6">
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} className="shrink-0 drop-shadow-sm">
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#f1f5f9" strokeWidth="20" />
+        {segs.map((s,i)=> (
+          <path key={i} d={s.path} stroke={s.color} strokeWidth="20" fill="none" strokeLinecap="round"
+            style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.08))' }} />
         ))}
+        <text x={cx} y={cy-2} textAnchor="middle" fontSize="32" fontWeight="800" fill="#0f172a">{fmtNum(total)}</text>
+        <text x={cx} y={cy+18} textAnchor="middle" fontSize="9" fill="#64748b" letterSpacing="2" fontWeight="600">{centerLabel}</text>
+      </svg>
+      <ul className="space-y-2.5 text-sm flex-1 w-full">
+        {data.map(d => {
+          const pct = total ? Math.round(d.value/total*100) : 0;
+          return (
+            <li key={d.label}>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full" style={{background:d.color}} />
+                  <span className="font-semibold text-slate-700">{d.label}</span>
+                </span>
+                <span className="text-slate-900 font-bold tabular-nums">{d.value} <span className="text-slate-400 font-medium">({pct}%)</span></span>
+              </div>
+              <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full rounded-full" style={{ width:`${pct}%`, background:d.color, opacity: 0.85 }} />
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
@@ -870,26 +993,31 @@ function Donut({ data, size=170 }) {
    =========================================================== */
 function KpiCard({ label, value, trend, sub, Icon, color, onClick }) {
   const palette = {
-    sky:    { wrap:'bg-sky-50 border-sky-200 text-sky-700' },
-    emerald:{ wrap:'bg-emerald-50 border-emerald-200 text-emerald-700' },
-    indigo: { wrap:'bg-indigo-50 border-indigo-200 text-indigo-700' },
-    violet: { wrap:'bg-violet-50 border-violet-200 text-violet-700' },
-    amber:  { wrap:'bg-amber-50 border-amber-200 text-amber-700' },
-    rose:   { wrap:'bg-rose-50 border-rose-200 text-rose-700' }
-  }[color] || { wrap:'bg-slate-50 border-slate-200 text-slate-700' };
+    sky:    { icon:'bg-sky-100 text-sky-700',     ring:'ring-sky-100',    glow:'from-sky-50/50' },
+    emerald:{ icon:'bg-emerald-100 text-emerald-700', ring:'ring-emerald-100', glow:'from-emerald-50/50' },
+    indigo: { icon:'bg-indigo-100 text-indigo-700', ring:'ring-indigo-100', glow:'from-indigo-50/50' },
+    violet: { icon:'bg-violet-100 text-violet-700', ring:'ring-violet-100', glow:'from-violet-50/50' },
+    amber:  { icon:'bg-amber-100 text-amber-700',   ring:'ring-amber-100',  glow:'from-amber-50/50' },
+    rose:   { icon:'bg-rose-100 text-rose-700',     ring:'ring-rose-100',   glow:'from-rose-50/50' }
+  }[color] || { icon:'bg-slate-100 text-slate-700', ring:'ring-slate-100', glow:'from-slate-50/50' };
   const up = trend >= 0;
   return (
-    <button onClick={onClick} className="text-left bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md hover:border-uinr/40 transition w-full">
-      <div className="flex items-start justify-between mb-3">
-        <div className={`p-2 rounded-lg border ${palette.wrap}`}><Icon size={18} /></div>
-        <div className={`flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${up ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
-          {up ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+    <button onClick={onClick}
+      className={`group relative text-left bg-white border border-slate-200/80 rounded-2xl p-5 shadow-sm hover:shadow-lg hover:border-uinr/30 hover:-translate-y-0.5 transition-all w-full overflow-hidden`}>
+      {/* Subtle radial glow */}
+      <div className={`absolute -top-12 -right-12 w-32 h-32 rounded-full bg-gradient-to-br ${palette.glow} to-transparent opacity-70 pointer-events-none`} />
+      <div className="relative flex items-start justify-between mb-4">
+        <div className={`p-2.5 rounded-xl ${palette.icon} ring-4 ${palette.ring}`}><Icon size={18} /></div>
+        <div className={`flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full ${up ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+          {up ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
           {up ? '+' : ''}{trend.toFixed(1)}%
         </div>
       </div>
-      <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">{label}</div>
-      <div className="text-2xl font-bold text-slate-900 mt-1">{value}</div>
-      <div className="text-xs text-slate-500 mt-1">{sub}</div>
+      <div className="relative">
+        <div className="text-[10px] uppercase tracking-[0.08em] text-slate-500 font-semibold">{label}</div>
+        <div className="text-[28px] font-extrabold text-slate-900 mt-1 leading-none tracking-tight tabular-nums">{value}</div>
+        <div className="text-xs text-slate-500 mt-2">{sub}</div>
+      </div>
     </button>
   );
 }
@@ -918,7 +1046,7 @@ function Overview({ students, hospitals, families, audit, sync, user, setSection
   // Students per district
   const distGroups = {};
   students.forEach(s => { distGroups[s.district] = (distGroups[s.district] || 0) + 1; });
-  const studentsByDistrict = Object.entries(distGroups).sort((a,b) => b[1]-a[1]).map(([label,value]) => ({ label, value }));
+  const studentsByDistrict = Object.entries(distGroups).sort((a,b) => b[1]-a[1]).slice(0, 10).map(([label,value]) => ({ label, value }));
 
   // Vaccination coverage per district
   const vacAcc = {};
@@ -927,7 +1055,7 @@ function Overview({ students, hospitals, families, audit, sync, user, setSection
     vacAcc[h.district].sum += h.vacCoverage;
     vacAcc[h.district].n   += 1;
   });
-  const vacByDistrict = Object.entries(vacAcc).map(([label,v]) => ({ label, value: Math.round(v.sum/v.n) })).sort((a,b)=>b.value-a.value);
+  const vacByDistrict = Object.entries(vacAcc).map(([label,v]) => ({ label, value: Math.round(v.sum/v.n) })).sort((a,b)=>b.value-a.value).slice(0, 10);
   const vacColor = (d) => d.value >= 85 ? '#10b981' : d.value >= 75 ? '#f59e0b' : '#ef4444';
 
   // Drug stock donut
@@ -963,12 +1091,12 @@ function Overview({ students, hospitals, families, audit, sync, user, setSection
   }));
 
   const kpis = [
-    { label:'Students Enrolled',  value:enrolled.toLocaleString(),  trend:8.2,  sub:`${students.length} records · ${graduated} graduated`, Icon:GraduationCap, color:'sky',     target:'students'  },
-    { label:'Health Facilities',  value:hospitals.length.toLocaleString(), trend:1.4, sub:`${totalBeds.toLocaleString()} beds · ${critical} critical`, Icon:Hospital, color:'emerald', target:'hospitals' },
-    { label:'Families Registered',value:families.length.toLocaleString(), trend:4.6, sub:`${citizens} citizens linked`, Icon:Users2, color:'indigo', target:'families' },
-    { label:'Citizens Linked',    value:citizens.toLocaleString(), trend:6.1,  sub:'multi-generational records', Icon:Sparkles, color:'violet', target:'families' },
-    { label:'Edits This Week',    value:editsThisWeek.toLocaleString(), trend:12.0, sub:`${audit.length} audit entries`, Icon:Activity, color:'amber', target:'audit' },
-    { label:'Open Alerts',        value:alertsCount.toLocaleString(), trend:-3.1, sub:`${critical} critical · ${dropouts} dropouts`, Icon:BellRing, color:'rose', target:'overview' }
+    { label:'Students Enrolled',  value:fmtNum(enrolled),  trend:8.2,  sub:`${fmtNum(students.length)} records · ${fmtNum(graduated)} graduated`, Icon:GraduationCap, color:'sky',     target:'students'  },
+    { label:'Health Facilities',  value:fmtNum(hospitals.length), trend:1.4, sub:`${fmtNum(totalBeds)} beds · ${critical} critical`, Icon:Hospital, color:'emerald', target:'hospitals' },
+    { label:'Families Registered',value:fmtNum(families.length), trend:4.6, sub:`${fmtNum(citizens)} citizens linked`, Icon:Users2, color:'indigo', target:'families' },
+    { label:'Citizens Linked',    value:fmtNum(citizens), trend:6.1,  sub:'multi-generational records', Icon:Sparkles, color:'violet', target:'families' },
+    { label:'Edits This Week',    value:fmtNum(editsThisWeek), trend:12.0, sub:`${fmtNum(audit.length)} audit entries`, Icon:Activity, color:'amber', target:'audit' },
+    { label:'Open Alerts',        value:fmtNum(alertsCount), trend:-3.1, sub:`${critical} critical · ${dropouts} dropouts`, Icon:BellRing, color:'rose', target:'overview' }
   ];
 
   const quickActions = [
@@ -1000,23 +1128,33 @@ function Overview({ students, hospitals, families, audit, sync, user, setSection
       )}
 
       {/* Hero banner */}
-      <div className="bg-gradient-to-r from-uinr-dark via-uinr to-uinr-light text-white rounded-2xl p-6 shadow-lg flex flex-col lg:flex-row lg:items-center gap-5">
-        <div className="flex-1">
-          <div className="flex items-center gap-2 text-white/70 text-xs uppercase tracking-wider"><Globe2 size={14} /> {today}</div>
-          <h2 className="text-2xl font-bold mt-1">{greet}, {user.name.split(' ')[0]}.</h2>
-          <p className="text-white/80 text-sm mt-1">
-            {enrolled.toLocaleString()} students enrolled across {Object.keys(distGroups).length} districts ·
-            {' '}{totalVisits.toLocaleString()} patient visits this period ·
-            {' '}<span className="text-amber-200 font-semibold">{alertsCount} open alerts</span>
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {quickActions.map(a => (
-            <button key={a.target} onClick={()=>setSection(a.target)}
-              className="flex items-center gap-2 bg-white/10 hover:bg-white/20 backdrop-blur px-3.5 py-2 rounded-lg text-sm font-medium transition">
-              <a.Icon size={16} /> {a.label} <ArrowRight size={14} className="opacity-70" />
-            </button>
-          ))}
+      <div className="relative bg-gradient-to-br from-uinr-dark via-uinr to-uinr-light text-white rounded-3xl p-6 lg:p-8 shadow-2xl shadow-uinr/20 overflow-hidden">
+        {/* Decorative grid */}
+        <div className="absolute inset-0 opacity-[0.07] pointer-events-none"
+          style={{ backgroundImage: 'radial-gradient(circle, white 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
+        <div className="absolute -top-24 -right-24 w-96 h-96 bg-amber-300/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="relative flex flex-col lg:flex-row lg:items-center gap-6">
+          <div className="flex-1">
+            <div className="flex items-center gap-2 text-white/70 text-[11px] uppercase tracking-[0.15em] font-semibold">
+              <Globe2 size={12} /> {today}
+            </div>
+            <h2 className="text-3xl lg:text-4xl font-bold mt-2 tracking-tight">{greet}, {user.name.split(' ')[0]}.</h2>
+            <p className="text-white/80 text-sm mt-2 max-w-xl leading-relaxed">
+              <span className="text-white font-semibold">{fmtNum(enrolled)}</span> students enrolled across
+              <span className="text-white font-semibold"> {Object.keys(distGroups).length}</span> districts ·
+              <span className="text-white font-semibold"> {fmtNum(totalVisits)}</span> patient visits this period ·
+              <span className="text-amber-300 font-bold"> {alertsCount} open alerts</span>
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {quickActions.map(a => (
+              <button key={a.target} onClick={()=>setSection(a.target)}
+                className="group flex items-center gap-2 bg-white/10 hover:bg-white/20 active:bg-white/25 backdrop-blur-md border border-white/15 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all hover:-translate-y-0.5">
+                <a.Icon size={15} /> {a.label}
+                <ArrowRight size={13} className="opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -1028,80 +1166,83 @@ function Overview({ students, hospitals, families, audit, sync, user, setSection
       </div>
 
       {/* Charts row 1 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl shadow-sm">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <BarChart3 size={18} className="text-uinr" />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="lg:col-span-2 bg-white border border-slate-200/70 rounded-2xl shadow-sm">
+          <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="bg-sky-100 text-sky-700 p-2 rounded-lg"><BarChart3 size={16} /></div>
               <div>
-                <div className="font-semibold text-slate-900">Enrolment trend</div>
+                <div className="font-bold text-slate-900">Enrolment trend</div>
                 <div className="text-xs text-slate-500">Students by enrolment year</div>
               </div>
             </div>
             <Badge kind="blue">Education</Badge>
           </div>
-          <div className="p-5">
+          <div className="p-6">
             {enrolmentSeries.length > 0
               ? <AreaChart data={enrolmentSeries} color="#1a3a5c" />
               : <div className="text-sm text-slate-500 py-10 text-center">No enrolment data.</div>}
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <MapPin size={18} className="text-uinr" />
+        <div className="bg-white border border-slate-200/70 rounded-2xl shadow-sm">
+          <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="bg-indigo-100 text-indigo-700 p-2 rounded-lg"><MapPin size={16} /></div>
               <div>
-                <div className="font-semibold text-slate-900">Students by district</div>
+                <div className="font-bold text-slate-900">Students by district</div>
                 <div className="text-xs text-slate-500">Top {studentsByDistrict.length} districts</div>
               </div>
             </div>
           </div>
-          <div className="p-5">
+          <div className="p-6">
             <HBarChart data={studentsByDistrict} color="#1a3a5c" />
           </div>
         </div>
       </div>
 
       {/* Charts row 2 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl shadow-sm">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Syringe size={18} className="text-emerald-600" />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="lg:col-span-2 bg-white border border-slate-200/70 rounded-2xl shadow-sm">
+          <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="bg-emerald-100 text-emerald-700 p-2 rounded-lg"><Syringe size={16} /></div>
               <div>
-                <div className="font-semibold text-slate-900">Vaccination coverage by district</div>
-                <div className="text-xs text-slate-500">Average across reporting facilities</div>
+                <div className="font-bold text-slate-900">Vaccination coverage</div>
+                <div className="text-xs text-slate-500">Average per district · top {vacByDistrict.length}</div>
               </div>
             </div>
             <Badge kind="green">Health</Badge>
           </div>
-          <div className="p-5">
-            <HBarChart data={vacByDistrict} color={vacColor} valueSuffix="%" />
+          <div className="p-6">
+            <HBarChart data={vacByDistrict} color={vacColor} valueSuffix="%" max={100} />
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
-            <Stethoscope size={18} className="text-uinr" />
+        <div className="bg-white border border-slate-200/70 rounded-2xl shadow-sm">
+          <div className="px-6 py-5 border-b border-slate-100 flex items-center gap-3">
+            <div className="bg-rose-100 text-rose-700 p-2 rounded-lg"><Stethoscope size={16} /></div>
             <div>
-              <div className="font-semibold text-slate-900">Drug stock distribution</div>
-              <div className="text-xs text-slate-500">Across {hospitals.length} facilities</div>
+              <div className="font-bold text-slate-900">Drug stock</div>
+              <div className="text-xs text-slate-500">Across {fmtNum(hospitals.length)} facilities</div>
             </div>
           </div>
-          <div className="p-5">
+          <div className="p-6">
             <Donut data={stockDonut} />
           </div>
         </div>
       </div>
 
       {/* Bottom row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl shadow-sm">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-            <div>
-              <div className="font-semibold text-slate-900">Recent Record Edits</div>
-              <div className="text-xs text-slate-500">Latest changes across the system</div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="lg:col-span-2 bg-white border border-slate-200/70 rounded-2xl shadow-sm">
+          <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="bg-amber-100 text-amber-700 p-2 rounded-lg"><Clock size={16} /></div>
+              <div>
+                <div className="font-bold text-slate-900">Recent record edits</div>
+                <div className="text-xs text-slate-500">Latest changes across the system</div>
+              </div>
             </div>
             <button onClick={()=>setSection('audit')} className="text-xs font-semibold text-uinr hover:underline flex items-center gap-1">
               Full audit log <ArrowRight size={12} />
@@ -1133,12 +1274,12 @@ function Overview({ students, hospitals, families, audit, sync, user, setSection
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <BellRing size={18} className="text-rose-600" />
+        <div className="bg-white border border-slate-200/70 rounded-2xl shadow-sm">
+          <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="bg-rose-100 text-rose-700 p-2 rounded-lg"><BellRing size={16} /></div>
               <div>
-                <div className="font-semibold text-slate-900">Critical alerts</div>
+                <div className="font-bold text-slate-900">Critical alerts</div>
                 <div className="text-xs text-slate-500">{alerts.length} open</div>
               </div>
             </div>
@@ -1168,12 +1309,12 @@ function Overview({ students, hospitals, families, audit, sync, user, setSection
       </div>
 
       {/* Top schools / facilities / sync row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
-            <School size={18} className="text-uinr" />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="bg-white border border-slate-200/70 rounded-2xl shadow-sm">
+          <div className="px-6 py-5 border-b border-slate-100 flex items-center gap-3">
+            <div className="bg-sky-100 text-sky-700 p-2 rounded-lg"><School size={16} /></div>
             <div>
-              <div className="font-semibold text-slate-900">Top schools by enrolment</div>
+              <div className="font-bold text-slate-900">Top schools by enrolment</div>
               <div className="text-xs text-slate-500">Active students</div>
             </div>
           </div>
@@ -1191,11 +1332,11 @@ function Overview({ students, hospitals, families, audit, sync, user, setSection
           </ul>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
-            <Building2 size={18} className="text-emerald-600" />
+        <div className="bg-white border border-slate-200/70 rounded-2xl shadow-sm">
+          <div className="px-6 py-5 border-b border-slate-100 flex items-center gap-3">
+            <div className="bg-emerald-100 text-emerald-700 p-2 rounded-lg"><Building2 size={16} /></div>
             <div>
-              <div className="font-semibold text-slate-900">Busiest facilities</div>
+              <div className="font-bold text-slate-900">Busiest facilities</div>
               <div className="text-xs text-slate-500">Recent patient visits</div>
             </div>
           </div>
@@ -1215,13 +1356,16 @@ function Overview({ students, hospitals, families, audit, sync, user, setSection
           </ul>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-            <div>
-              <div className="font-semibold text-slate-900">District Sync Status</div>
-              <div className="text-xs text-slate-500">{sync.length} districts · {syncingCount} syncing</div>
+        <div className="bg-white border border-slate-200/70 rounded-2xl shadow-sm">
+          <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="bg-violet-100 text-violet-700 p-2 rounded-lg"><Globe2 size={16} /></div>
+              <div>
+                <div className="font-bold text-slate-900">District sync</div>
+                <div className="text-xs text-slate-500">{sync.length} districts · {syncingCount} syncing</div>
+              </div>
             </div>
-            <RefreshCcw size={16} className={`text-slate-400 ${syncingCount > 0 ? 'animate-spin' : ''}`} />
+            <RefreshCcw size={14} className={`text-slate-400 ${syncingCount > 0 ? 'animate-spin' : ''}`} />
           </div>
           <ul className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
             {sync.map(s => (
@@ -1265,10 +1409,21 @@ function StudentForm({ initial, onSave, onClose, user, schools = [] }) {
   const [f, setF] = useState(initial || {
     name:'', nin:'', school:'', district: user.role==='District Registrar' ? user.district : 'Kampala',
     level:'S1', enrolmentYear: 2026, unebResults:'—', status:'Enrolled', guardianNin:'',
-    bursaryEligible:false, specialNeeds:false
+    bursaryEligible:false, specialNeeds:false, religion:''
   });
   const update = (k, v) => setF(s => ({ ...s, [k]: v }));
-  const submit = (e) => { e.preventDefault(); onSave(f); };
+  const submit = (e) => {
+    e.preventDefault();
+    // If the school they typed isn't in the loaded schools list, add it so it shows up next time.
+    const known = schools.some(s => s.name.toLowerCase() === (f.school || '').toLowerCase() && s.district === f.district);
+    if (!known && f.school) {
+      const level = ['P1','P2','P3','P4','P5','P6','P7'].includes(f.level) ? 'Primary'
+                  : ['S1','S2','S3','S4','S5','S6'].includes(f.level) ? 'Secondary'
+                  : f.level === 'University' ? 'University' : 'Primary';
+      addSchoolIfNew({ name: f.school, district: f.district, level });
+    }
+    onSave(f);
+  };
   const lockedDistrict = user.role === 'District Registrar';
 
   // School options scoped to the selected district (falls back to all if district has none).
@@ -1281,11 +1436,13 @@ function StudentForm({ initial, onSave, onClose, user, schools = [] }) {
   return (
     <form onSubmit={submit} id="student-form" className="grid grid-cols-1 md:grid-cols-2 gap-4">
       <Field label="Full Name"><input className={inputCls} value={f.name} onChange={e=>update('name', e.target.value)} required /></Field>
-      <Field label="NIN"><input className={inputCls} value={f.nin} onChange={e=>update('nin', e.target.value)} required /></Field>
+      <Field label="NIN (optional)">
+        <input className={inputCls} value={f.nin} onChange={e=>update('nin', e.target.value)} placeholder="Leave blank if no ID card yet" />
+      </Field>
       <Field label="School">
         {schoolOptions.length > 0
           ? <SearchableSelect value={f.school} onChange={(v)=>update('school', v)}
-              options={schoolOptions} placeholder="Search schools in this district…" allowFreeText />
+              options={schoolOptions} placeholder="Search schools in this district — or type a new one" allowFreeText />
           : <input className={inputCls} value={f.school} onChange={e=>update('school', e.target.value)} required placeholder="Type school name" />}
       </Field>
       <Field label="District">
@@ -1306,7 +1463,19 @@ function StudentForm({ initial, onSave, onClose, user, schools = [] }) {
           {STUDENT_STATUSES.map(s => <option key={s}>{s}</option>)}
         </select>
       </Field>
-      <Field label="Guardian NIN"><input className={inputCls} value={f.guardianNin} onChange={e=>update('guardianNin', e.target.value)} /></Field>
+      <Field label="Guardian NIN (optional)"><input className={inputCls} value={f.guardianNin} onChange={e=>update('guardianNin', e.target.value)} placeholder="Leave blank if guardian has no ID" /></Field>
+      <Field label="Religion (optional)">
+        <select className={inputCls} value={f.religion} onChange={e=>update('religion', e.target.value)}>
+          <option value="">— Not stated —</option>
+          {RELIGIONS.map(r => <option key={r}>{r}</option>)}
+        </select>
+      </Field>
+      <div className="md:col-span-2 p-3 bg-sky-50 border border-sky-200 rounded-lg text-xs text-sky-900 flex items-start gap-2">
+        <Info size={14} className="mt-0.5 shrink-0" />
+        <div>
+          <span className="font-semibold">NIN is optional.</span> Many children, refugees, and adults in remote districts do not yet have NIRA identity cards. They should still be registered. You can add a NIN later when issued.
+        </div>
+      </div>
       <label className="flex items-center gap-2 mt-2">
         <input type="checkbox" className="w-4 h-4 accent-uinr" checked={!!f.bursaryEligible} onChange={e=>update('bursaryEligible', e.target.checked)} />
         <span className="text-sm text-slate-700 flex items-center gap-1"><Award size={14} className="text-amber-600" /> Bursary eligible</span>
@@ -1365,7 +1534,7 @@ function FamilyForm({ initial, onSave, onClose, user }) {
   const [f, setF] = useState(initial || {
     head:'', nin:'', clan:CLANS[0], tribe:TRIBES[0], village:'',
     district: user.role==='District Registrar' ? user.district : 'Kampala',
-    members:1, marriage:'Monogamous',
+    members:1, marriage:'Monogamous', religion:'',
     tree:{ grandparents:[], parents:[], children:[] }
   });
   const update = (k, v) => setF(s => ({ ...s, [k]: v }));
@@ -1375,7 +1544,7 @@ function FamilyForm({ initial, onSave, onClose, user }) {
   return (
     <form onSubmit={submit} id="family-form" className="grid grid-cols-1 md:grid-cols-2 gap-4">
       <Field label="Family Head Name"><input className={inputCls} value={f.head} onChange={e=>update('head', e.target.value)} required /></Field>
-      <Field label="NIN"><input className={inputCls} value={f.nin} onChange={e=>update('nin', e.target.value)} required /></Field>
+      <Field label="Head's NIN (optional)"><input className={inputCls} value={f.nin} onChange={e=>update('nin', e.target.value)} placeholder="Leave blank if no ID yet" /></Field>
       <Field label="Clan">
         <select className={inputCls} value={f.clan} onChange={e=>update('clan', e.target.value)}>
           {CLANS.map(c => <option key={c}>{c}</option>)}
@@ -1395,6 +1564,12 @@ function FamilyForm({ initial, onSave, onClose, user }) {
       <Field label="Marriage Status">
         <select className={inputCls} value={f.marriage} onChange={e=>update('marriage', e.target.value)}>
           <option>Monogamous</option><option>Polygamous</option><option>Single</option><option>Widowed</option><option>Divorced</option>
+        </select>
+      </Field>
+      <Field label="Religion (optional)">
+        <select className={inputCls} value={f.religion || ''} onChange={e=>update('religion', e.target.value)}>
+          <option value="">— Not stated —</option>
+          {RELIGIONS.map(r => <option key={r}>{r}</option>)}
         </select>
       </Field>
     </form>
@@ -1567,7 +1742,10 @@ function StudentsPage({ students, dispatch, user, pushToast, audit, addAudit, op
       { key:'name', label:'Name' }, { key:'nin', label:'NIN' }, { key:'school', label:'School' },
       { key:'district', label:'District' }, { key:'level', label:'Level' },
       { key:'enrolmentYear', label:'Enrolment Year' }, { key:'unebResults', label:'UNEB Results' },
-      { key:'status', label:'Status' }, { key:'guardianNin', label:'Guardian NIN' }
+      { key:'status', label:'Status' }, { key:'religion', label:'Religion' },
+      { key:'bursaryEligible', label:'Bursary Eligible', value:r => r.bursaryEligible ? 'Yes' : 'No' },
+      { key:'specialNeeds',   label:'Special Needs',    value:r => r.specialNeeds ? 'Yes' : 'No' },
+      { key:'guardianNin', label:'Guardian NIN' }
     ]);
     pushToast('success', 'Exported students.csv');
   };
@@ -1619,6 +1797,7 @@ function StudentsPage({ students, dispatch, user, pushToast, audit, addAudit, op
                 {[
                   ['name','Name'],['nin','NIN'],['school','School'],['district','District'],
                   ['level','Level'],['enrolmentYear','Year'],['unebResults','UNEB'],['status','Status'],
+                  ['religion','Religion'],
                   ['bursaryEligible','Bursary'],['specialNeeds','Special Needs'],['guardianNin','Guardian NIN']
                 ].map(([k,l]) => (
                   <th key={k} onClick={()=>headerClick(k)} className="text-left px-4 py-2.5 font-medium cursor-pointer select-none whitespace-nowrap">
@@ -1635,13 +1814,16 @@ function StudentsPage({ students, dispatch, user, pushToast, audit, addAudit, op
               {sorted.map(s => (
                 <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={()=>setEditing(s)}>
                   <td className="px-4 py-2.5 font-medium text-slate-800">{s.name}</td>
-                  <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{s.nin}</td>
+                  <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">
+                    {s.nin || <span className="text-slate-400 italic">No NIN yet</span>}
+                  </td>
                   <td className="px-4 py-2.5 text-slate-600">{s.school}</td>
                   <td className="px-4 py-2.5 text-slate-600">{s.district}</td>
                   <td className="px-4 py-2.5 text-slate-600">{s.level}</td>
                   <td className="px-4 py-2.5 text-slate-600">{s.enrolmentYear}</td>
                   <td className="px-4 py-2.5 text-slate-600">{s.unebResults}</td>
                   <td className="px-4 py-2.5"><Badge kind={statusKind(s.status)}>{s.status}</Badge></td>
+                  <td className="px-4 py-2.5 text-slate-600 text-xs">{s.religion || <span className="text-slate-400">—</span>}</td>
                   <td className="px-4 py-2.5">
                     {s.bursaryEligible
                       ? <span className="inline-flex items-center gap-1 text-xs text-amber-700"><Award size={12} /> Yes</span>
@@ -1652,7 +1834,9 @@ function StudentsPage({ students, dispatch, user, pushToast, audit, addAudit, op
                       ? <span className="inline-flex items-center gap-1 text-xs text-sky-700"><Accessibility size={12} /> Yes</span>
                       : <span className="text-xs text-slate-400">No</span>}
                   </td>
-                  <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{s.guardianNin}</td>
+                  <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">
+                    {s.guardianNin || <span className="text-slate-400 italic">—</span>}
+                  </td>
                   <td className="px-4 py-2.5 text-right whitespace-nowrap" onClick={e=>e.stopPropagation()}>
                     <button onClick={()=>openProfile({ name:s.name, nin:s.nin })}
                       className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-uinr hover:bg-sky-50">
@@ -2320,6 +2504,7 @@ function RolesPage({ admins, dispatch, user, pushToast, addAudit }) {
   const [adding, setAdding] = useState(false);
   const [confirmAct, setConfirmAct] = useState(null);
   const [inviting, setInviting] = useState(false);
+  const [inviteResult, setInviteResult] = useState(null); // { email, tempPw, name }
 
   const sendReset = async (u) => {
     try {
@@ -2331,20 +2516,25 @@ function RolesPage({ admins, dispatch, user, pushToast, addAudit }) {
 
   const handleInvite = async ({ name, email, role, district }) => {
     try {
+      let tempPw = null;
       if (supabaseConfigured) {
-        // Generate a temp password they'll change on first login
-        const tempPw = 'Uinr' + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-2) + '!';
+        // Generate a memorable temp password they'll change on first login
+        tempPw = 'Uinr-' + Math.random().toString(36).slice(2, 8).toUpperCase() + '-' + Math.floor(Math.random()*100);
         await signUpOrganization({
           email, password: tempPw, name,
-          organizationName: 'UINR', phone: '', district, orgType: 'District Office', plan: 'District'
+          organizationName: 'UINR', phone: '', district, orgType: 'District Office', plan: 'District',
+          role
         });
-        // Note: in real production the new auth user's role/district come from raw_user_meta_data via the trigger;
-        // for safety also push into our admins table for the listing
+        // Mark them so they must change password on first login
+        try {
+          await supabase.from('profiles').update({ role, district, must_change_password: true })
+            .eq('id', (await supabase.from('profiles').select('id').eq('username', email.split('@')[0]).single()).data?.id);
+        } catch {}
       }
       await dispatch({ type:'USER_ADD', payload: { name, username: email, role, district, status:'Active' } });
       addAudit('Created', 'Roles', `Invited ${email} as ${role}`, user);
-      pushToast('success', `Invite sent to ${email}`);
       setInviting(false);
+      setInviteResult({ email, tempPw, name, role });
     } catch (e) { pushToast('error', e.message); }
   };
 
@@ -2463,7 +2653,75 @@ function RolesPage({ admins, dispatch, user, pushToast, addAudit }) {
         message={confirmAct ? `${confirmAct.name} will be ${confirmAct.status === 'Active' ? 'suspended' : 'reactivated'}. They will ${confirmAct.status === 'Active' ? 'lose' : 'regain'} access immediately.` : ''} />
 
       <InviteUserModal open={inviting} onClose={()=>setInviting(false)} onInvite={handleInvite} />
+      <InviteResultModal result={inviteResult} onClose={()=>setInviteResult(null)} pushToast={pushToast} />
     </div>
+  );
+}
+
+function InviteResultModal({ result, onClose, pushToast }) {
+  if (!result) return null;
+  const { email, tempPw, name, role } = result;
+  const shareText = `You've been invited to join UINR — Uganda Integrated National Registry.
+
+Email: ${email}
+Temporary password: ${tempPw || '(set by your administrator)'}
+Role: ${role}
+
+Sign in at: ${window.location.origin}
+You'll be asked to set a new password on first login.`;
+  const copy = (text, label) => {
+    navigator.clipboard.writeText(text);
+    pushToast('success', `${label} copied to clipboard`);
+  };
+  return (
+    <Modal open={!!result} onClose={onClose} title="Invite created"
+      footer={<>
+        <button onClick={()=>copy(shareText, 'Invite message')}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50 text-sm">
+          <FileText size={14} /> Copy message
+        </button>
+        <button onClick={onClose}
+          className="px-4 py-2 rounded-lg bg-uinr text-white hover:bg-uinr-dark">Done</button>
+      </>}>
+      <div className="space-y-4">
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-900 flex items-start gap-2">
+          <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
+          <div>
+            <div className="font-semibold">{name} has been added as {role}.</div>
+            <div className="text-xs mt-0.5 text-emerald-800">Share the credentials below with them via a secure channel (WhatsApp, secure email, SMS).</div>
+          </div>
+        </div>
+
+        <div className="border border-slate-200 rounded-lg overflow-hidden">
+          <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 text-xs font-bold uppercase tracking-wider text-slate-500">Login credentials</div>
+          <div className="divide-y divide-slate-100">
+            <div className="px-4 py-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs text-slate-500 uppercase tracking-wider font-semibold mb-0.5">Email</div>
+                <div className="font-mono text-sm text-slate-900 truncate">{email}</div>
+              </div>
+              <button onClick={()=>copy(email, 'Email')} className="text-xs font-semibold text-uinr hover:underline shrink-0">Copy</button>
+            </div>
+            {tempPw && (
+              <div className="px-4 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs text-slate-500 uppercase tracking-wider font-semibold mb-0.5">Temporary password</div>
+                  <div className="font-mono text-sm text-slate-900 truncate">{tempPw}</div>
+                </div>
+                <button onClick={()=>copy(tempPw, 'Password')} className="text-xs font-semibold text-uinr hover:underline shrink-0">Copy</button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-start gap-2">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          <div>
+            <span className="font-semibold">Important:</span> {name} will be forced to set a new password on first login. This temporary password is shown only once — copy it now if you haven't shared it yet.
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -2855,7 +3113,8 @@ function ProfileView({ person, state, setSection, openProfile, onBack }) {
               <Stat label="Enrolment year" value={student.enrolmentYear} />
               <Stat label="UNEB results" value={student.unebResults} />
               <Stat label="Status" value={<Badge kind={statusKind(student.status)}>{student.status}</Badge>} />
-              <Stat label="Guardian NIN" value={<span className="font-mono">{student.guardianNin}</span>} />
+              <Stat label="Religion" value={student.religion || <span className="text-slate-400">—</span>} />
+              <Stat label="Guardian NIN" value={<span className="font-mono">{student.guardianNin || '—'}</span>} />
               <div className="col-span-2">
                 <button onClick={()=>setSection('students')} className="text-xs text-uinr hover:underline flex items-center gap-1">
                   Open in Students module <ArrowRight size={12} />
@@ -3538,7 +3797,7 @@ function LandingPage({ goLogin, goSignup, goDemo }) {
 /* ===========================================================
    Signup screen
    =========================================================== */
-function SignupScreen({ initialPlan, goLogin, goLanding, pushToast }) {
+function SignupScreen({ initialPlan, goLogin, goLanding, pushToast, onAutoLogin }) {
   const [step, setStep] = useState('form');
   const [f, setF] = useState({
     organizationName:'', name:'', email:'', phone:'',
@@ -3557,11 +3816,18 @@ function SignupScreen({ initialPlan, goLogin, goLanding, pushToast }) {
     setLoading(true);
     try {
       if (supabaseConfigured) {
-        await signUpOrganization({
+        const result = await signUpOrganization({
           email: f.email, password: f.password, name: f.name,
           organizationName: f.organizationName, phone: f.phone,
           district: f.district, orgType: f.orgType, plan: f.plan
         });
+        if (result.profile && onAutoLogin) {
+          // Email confirmation is off — drop them straight on the dashboard
+          pushToast('success', `Welcome to UINR, ${result.profile.name.split(' ')[0]}!`);
+          onAutoLogin(result.profile);
+          return;
+        }
+        // Otherwise show "check your email"
       } else {
         await new Promise(r => setTimeout(r, 700));
       }
@@ -3663,6 +3929,48 @@ function SignupScreen({ initialPlan, goLogin, goLanding, pushToast }) {
           </p>
         </form>
       </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Recovery (forgot-password link) password reset modal
+   =========================================================== */
+function RecoveryPasswordModal({ onComplete, pushToast }) {
+  const [pw, setPw] = useState(''); const [c, setC] = useState('');
+  const [loading, setLoading] = useState(false); const [err, setErr] = useState('');
+  const submit = async (e) => {
+    e.preventDefault(); setErr('');
+    if (pw !== c) { setErr('Passwords do not match.'); return; }
+    if (pw.length < 8 || !/\d/.test(pw)) { setErr('Password must be at least 8 characters with one number.'); return; }
+    setLoading(true);
+    try {
+      await updatePassword(pw);
+      pushToast('success', 'Password reset — you can now sign in');
+      // Clean recovery params from URL
+      try { window.history.replaceState({}, '', window.location.pathname); } catch {}
+      onComplete();
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  };
+  return (
+    <div className="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4">
+      <form onSubmit={submit} className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-7">
+        <div className="w-14 h-14 mx-auto bg-sky-100 text-sky-700 rounded-full flex items-center justify-center mb-4">
+          <KeyRound size={24} />
+        </div>
+        <h2 className="text-xl font-bold text-center text-slate-900">Set a new password</h2>
+        <p className="text-sm text-slate-600 text-center mt-1">You followed a password reset link. Choose a new password to continue.</p>
+        {err && <div className="mt-4 p-3 bg-red-50 border border-red-200 text-red-800 rounded-lg text-sm flex items-start gap-2"><AlertTriangle size={16} className="mt-0.5 shrink-0" />{err}</div>}
+        <div className="mt-5 space-y-3">
+          <Field label="New password"><input type="password" className={inputCls} value={pw} onChange={e=>setPw(e.target.value)} required minLength={8} autoFocus /></Field>
+          <Field label="Confirm new password"><input type="password" className={inputCls} value={c} onChange={e=>setC(e.target.value)} required /></Field>
+          <div className="text-xs text-slate-500">At least 8 characters and one number.</div>
+        </div>
+        <button type="submit" disabled={loading} className="mt-5 w-full bg-uinr text-white py-2.5 rounded-lg font-semibold hover:bg-uinr-dark disabled:opacity-60 flex items-center justify-center gap-2">
+          {loading ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Set password and sign in
+        </button>
+      </form>
     </div>
   );
 }
@@ -3915,6 +4223,7 @@ export default function App() {
   const [billing, setBilling] = useState([]);
   const [schools, setSchools] = useState([]);
   const [mustChangeOpen, setMustChangeOpen] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [section, setSection] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [state, dispatch] = useReducer(reducer, persisted?.state ?? initialState);
@@ -3983,9 +4292,16 @@ export default function App() {
         if (!cancelled) setAuthReady(true);
       }
     })();
-    const unsubscribe = onAuthChange((u) => {
-      if (!cancelled) setUser(u);
-    });
+    const unsubscribe = onAuthChange(
+      (u) => { if (!cancelled) setUser(u); },
+      (_recoveryUser) => {
+        if (!cancelled) {
+          setRecoveryOpen(true);
+          setAuthReady(true);
+          push('info', 'You can set a new password now.');
+        }
+      }
+    );
     return () => { cancelled = true; unsubscribe(); };
   }, [push]);
 
@@ -4120,6 +4436,22 @@ export default function App() {
     if (u.mustChangePassword) setMustChangeOpen(true);
   };
 
+  if (recoveryOpen) {
+    return (<>
+      <RecoveryPasswordModal pushToast={push}
+        onComplete={async ()=>{
+          setRecoveryOpen(false);
+          // After resetting password the session is still active — pick up the profile.
+          try {
+            const restored = await restoreSession();
+            if (restored) handleLogin(restored);
+            else setScreen('login');
+          } catch { setScreen('login'); }
+        }} />
+      <ToastStack toasts={toasts} />
+    </>);
+  }
+
   if (!user) {
     if (screen === 'landing') return (<>
       <LandingPage
@@ -4148,6 +4480,7 @@ export default function App() {
         initialPlan={signupPlan}
         goLogin={()=>setScreen('login')}
         goLanding={()=>setScreen('landing')}
+        onAutoLogin={handleLogin}
         pushToast={push} />
       <ToastStack toasts={toasts} />
     </>);
@@ -4186,7 +4519,7 @@ export default function App() {
   }[section] || { title:'Overview', subtitle:'' };
 
   return (
-    <div className="min-h-screen flex bg-slate-50">
+    <div className="min-h-screen flex bg-gradient-to-br from-slate-50 via-slate-50 to-sky-50/40">
       <Sidebar section={section} setSection={(s)=>{ setSection(s); if (s !== 'profile') setProfilePerson(null); }} user={user}
                onLogout={handleLogout}
                open={sidebarOpen} setOpen={setSidebarOpen} />
@@ -4198,7 +4531,7 @@ export default function App() {
                 unreadCount={unreadAlerts.length}
                 dbConnected={supabaseConfigured}
                 dbLoading={dbLoading} />
-        <div className="p-4 lg:p-8 flex-1 overflow-auto">
+        <div className="p-4 lg:p-8 xl:p-10 flex-1 overflow-auto max-w-[1600px] w-full mx-auto">
           {section === 'overview'  && <Overview students={state.students} hospitals={state.hospitals} families={state.families} audit={state.audit} sync={state.sync} user={user} setSection={setSection} />}
           {section === 'students'  && <StudentsPage students={state.students} dispatch={wdispatch} user={user} pushToast={push} audit={state.audit} addAudit={addAudit} openProfile={openProfile} schools={schools} />}
           {section === 'hospitals' && <HospitalsPage hospitals={state.hospitals} dispatch={wdispatch} user={user} pushToast={push} addAudit={addAudit} />}

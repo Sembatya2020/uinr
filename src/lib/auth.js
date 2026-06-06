@@ -30,7 +30,7 @@ export async function signInWithEmail(email, password) {
   return loadProfile(data.user);
 }
 
-export async function signUpOrganization({ email, password, name, organizationName, phone, district, orgType, plan }) {
+export async function signUpOrganization({ email, password, name, organizationName, phone, district, orgType, plan, role = 'Super Admin' }) {
   if (!isConfigured) throw new Error('Supabase is not configured.');
   const { data, error } = await supabase.auth.signUp({
     email, password,
@@ -41,12 +41,33 @@ export async function signUpOrganization({ email, password, name, organizationNa
         phone, district,
         org_type: orgType,
         plan,
-        role: 'Super Admin'
+        role
       }
     }
   });
   if (error) throw new Error(error.message);
-  return data;
+  // If a session is returned, email confirmation is OFF and the user is auto-signed-in.
+  // If session is null, email confirmation is ON — they need to click the link.
+  let profile = null;
+  if (data.session && data.user) {
+    // Give the trigger a moment to create the profile row
+    await new Promise(r => setTimeout(r, 400));
+    try { profile = await loadProfile(data.user); } catch { /* trigger may still be running */ }
+  }
+  return { session: data.session, user: data.user, profile };
+}
+
+export async function resendConfirmation(email) {
+  if (!isConfigured) throw new Error('Supabase is not configured.');
+  const { error } = await supabase.auth.resend({ type: 'signup', email });
+  if (error) throw new Error(error.message);
+}
+
+/* Returns the profile of the currently-recovered session (recovery URL flow). */
+export async function getRecoveryUser() {
+  if (!isConfigured) return null;
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.user || null;
 }
 
 export async function sendResetEmail(email) {
@@ -80,9 +101,13 @@ export async function restoreSession() {
   }
 }
 
-export function onAuthChange(cb) {
+export function onAuthChange(cb, onRecovery) {
   if (!isConfigured) return () => {};
   const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'PASSWORD_RECOVERY' && session) {
+      if (onRecovery) onRecovery(session.user);
+      return;
+    }
     if (event === 'SIGNED_OUT' || !session) { cb(null); return; }
     try { cb(await loadProfile(session.user)); }
     catch { cb(null); }
