@@ -1,6 +1,16 @@
 import React, { useState, useEffect, useMemo, useReducer, useCallback, useRef } from 'react';
-import { isConfigured as supabaseConfigured } from './lib/supabase';
-import { api, loadAll, seedDemoData, isEmpty, wipeAll, loadSchools, addSchoolIfNew } from './lib/api';
+import { isConfigured as supabaseConfigured, supabase } from './lib/supabase';
+import { api, loadAll, seedDemoData, isEmpty, wipeAll, loadSchools, addSchoolIfNew, setupHealth,
+         uploadDocument, getDocumentSignedUrl, deleteDocument } from './lib/api';
+// Bundle migration SQL files as raw strings so the wizard can display them inline
+import sql_v1_schema from '../supabase/schema.sql?raw';
+import sql_v1_auth   from '../supabase/auth-and-rls.sql?raw';
+import sql_v2        from '../supabase/v2-additions.sql?raw';
+import sql_v3        from '../supabase/v3-real-uganda.sql?raw';
+import sql_v4        from '../supabase/v4-flexible-data.sql?raw';
+import sql_v5        from '../supabase/v5-realistic-scale.sql?raw';
+import sql_v6        from '../supabase/v6-services-portal.sql?raw';
+import sql_v7        from '../supabase/v7-documents-storage.sql?raw';
 import { signInWithEmail, signOut as authSignOut, restoreSession, onAuthChange,
          signUpOrganization, sendResetEmail, updatePassword, resendConfirmation } from './lib/auth';
 import {
@@ -14,7 +24,11 @@ import {
   Clock, User as UserIcon, ChevronRight, CheckCheck, RotateCcw,
   Database, WifiOff, Loader2, Cloud, CloudOff,
   CreditCard, Award, Accessibility, Zap, Check, Star, Phone, Mail,
-  Building, Smartphone, Wallet, Send, UserPlus, Inbox, ArrowUp, ChevronsRight
+  Building, Smartphone, Wallet, Send, UserPlus, Inbox, ArrowUp, ChevronsRight,
+  Briefcase, Car, Plane, Landmark, Baby, Receipt, FileSignature, MapPinned,
+  Banknote, Layers, Filter as FilterIcon, FileQuestion,
+  Camera, Upload, FileImage, FileCheck, FileX, Paperclip,
+  Leaf, Radio, Globe, BookOpenCheck, ScrollText
 } from 'lucide-react';
 
 /* ===========================================================
@@ -83,6 +97,423 @@ const PLANS = [
     cta: 'Contact Sales'
   }
 ];
+
+/* Government services accessible through the portal. Each has form fields
+   tailored to the service. data is stored as JSONB on the application row. */
+const SERVICES = [
+  {
+    key:'passport', title:'Passport Application', agency:'Directorate of Citizenship and Immigration Control',
+    Icon:Plane, color:'sky', fee: 250000, processing:'2-3 weeks',
+    officialUrl:'https://immigration.go.ug',
+    applyUrl:'https://passports.go.ug',
+    paymentMethod:'URA Payment Registration Number (PRN)',
+    instructions:[
+      'Prepare a copy of your National ID and a passport-size photo.',
+      'Get a recommendation letter from your LC1 chairperson.',
+      'Open the official passport portal and complete the e-form.',
+      'Generate a URA PRN and pay at any bank or via mobile money.',
+      'Book an appointment for biometric capture at the Immigration office.'
+    ],
+    fields:[
+      { name:'type',     label:'Passport type', type:'select', options:['Ordinary','Diplomatic','Service','East African'] },
+      { name:'duration', label:'Validity',       type:'select', options:['5 years','10 years'] },
+      { name:'travel',   label:'Purpose of travel', type:'text', placeholder:'Tourism, Business, Study…' }
+    ],
+    requiredDocs:[
+      { key:'nin_copy',       label:'Copy of National ID (front)',     accept:'image/*,application/pdf', camera:true },
+      { key:'photo',          label:'Passport-size photo',             accept:'image/*',                 camera:true },
+      { key:'lc1_letter',     label:'Letter from LC1 Chairperson',     accept:'image/*,application/pdf' }
+    ]
+  },
+  {
+    key:'evisa', title:'eVisa Application', agency:'Directorate of Citizenship and Immigration Control',
+    Icon:Globe, color:'violet', fee: 180000, processing:'2-3 working days',
+    officialUrl:'https://visas.immigration.go.ug/',
+    applyUrl:'https://visas.immigration.go.ug/',
+    paymentMethod:'Online via Visa / Mastercard on the eVisa portal',
+    instructions:[
+      'For foreign visitors entering Uganda (or East African Tourist Visa applicants).',
+      'Scan a clear copy of the passport bio-data page and a recent passport-size photo.',
+      'Prepare return flight ticket and hotel / accommodation confirmation.',
+      'Open the official eVisa portal and complete the application form.',
+      'Pay online with a Visa / Mastercard. Print the confirmation and present on arrival.'
+    ],
+    fields:[
+      { name:'visaType', label:'Visa type', type:'select',
+        options:['Single Entry Tourist','Multiple Entry','Transit','East African Tourist','Business','Student','Medical'] },
+      { name:'duration', label:'Length of stay', type:'select', options:['Up to 30 days','Up to 90 days','Up to 12 months'] },
+      { name:'purpose',  label:'Purpose of visit', type:'text', placeholder:'Tourism, conference, family visit…' },
+      { name:'arrivalDate', label:'Intended arrival date', type:'date' }
+    ],
+    requiredDocs:[
+      { key:'passport_bio',   label:'Passport bio-data page',          accept:'image/*,application/pdf', camera:true },
+      { key:'photo',          label:'Recent passport-size photo',      accept:'image/*',                 camera:true },
+      { key:'return_ticket',  label:'Return flight ticket',            accept:'image/*,application/pdf' },
+      { key:'hotel_booking',  label:'Hotel / accommodation booking',   accept:'image/*,application/pdf' },
+      { key:'yellow_fever',   label:'Yellow fever vaccination card',   accept:'image/*,application/pdf', optional:true }
+    ]
+  },
+  {
+    key:'driving', title:'Driving Permit', agency:'Uganda Driver Licensing System',
+    Icon:Car, color:'amber', fee: 100000, processing:'5-7 days',
+    officialUrl:'https://www.face-technologies.com',
+    applyUrl:'http://online.uddl.co.ug',
+    paymentMethod:'URA PRN or bank deposit',
+    instructions:[
+      'Have your NIN copy and a passport-size photo ready.',
+      'Pass the eye test at any URDL-approved optician.',
+      'For new permits: pass the theory test at any URDL centre.',
+      'Submit your application on the official UDLS portal.',
+      'Pay via URA PRN and book a biometric capture appointment.'
+    ],
+    fields:[
+      { name:'class',   label:'Class', type:'select', options:['A (Motorcycle)','B (Light vehicle)','CM (Light goods)','CH (Heavy goods)','DL (Bus/PSV)'] },
+      { name:'period',  label:'Validity', type:'select', options:['1 year','3 years','5 years'] },
+      { name:'renewal', label:'Is this a renewal?', type:'checkbox' }
+    ],
+    requiredDocs:[
+      { key:'nin_copy',       label:'Copy of National ID',             accept:'image/*,application/pdf', camera:true },
+      { key:'photo',          label:'Passport-size photo',             accept:'image/*',                 camera:true },
+      { key:'eye_test',       label:'Eye test certificate',            accept:'image/*,application/pdf' },
+      { key:'theory_pass',    label:'Theory test pass slip',           accept:'image/*,application/pdf', optional:true }
+    ]
+  },
+  {
+    key:'bank', title:'Bank Account Opening', agency:'Partner Commercial Banks',
+    Icon:Wallet, color:'emerald', fee: 0, processing:'1-3 days',
+    officialUrl:'https://www.bou.or.ug',
+    paymentMethod:'No fee — banks may require an opening deposit',
+    bankPortals:{
+      'Stanbic Bank':           'https://www.stanbicbank.co.ug/uganda/personal/products-and-services/personal-banking/accounts',
+      'Centenary Bank':         'https://www.centenarybank.co.ug',
+      'DFCU Bank':              'https://www.dfcugroup.com',
+      'Equity Bank':            'https://equitygroupholdings.com/ug',
+      'Bank of Africa':         'https://boauganda.com',
+      'Absa Bank':              'https://www.absa.co.ug',
+      'Standard Chartered':     'https://www.sc.com/ug',
+      'Housing Finance Bank':   'https://www.housingfinance.co.ug',
+      'Post Bank Uganda':       'https://www.postbank.co.ug',
+      'PostBank':               'https://www.postbank.co.ug'
+    },
+    instructions:[
+      'Choose the bank that suits you — each one has its own onboarding portal.',
+      'Have your NIN copy (both sides), a passport photo, and proof of address ready.',
+      'Open the bank\'s online account-opening page (link generated below).',
+      'Some banks let you finish online; others require a branch visit for ID verification.'
+    ],
+    fields:[
+      { name:'bank', label:'Choose bank', type:'select',
+        options:['Stanbic Bank','Centenary Bank','DFCU Bank','Equity Bank','Bank of Africa','Absa Bank','Standard Chartered','Housing Finance Bank','Post Bank Uganda','PostBank'] },
+      { name:'accountType', label:'Account type', type:'select', options:['Savings','Current','Fixed Deposit','Salary Account','Student Account'] },
+      { name:'currency',    label:'Currency', type:'select', options:['UGX','USD','EUR','GBP'] }
+    ],
+    requiredDocs:[
+      { key:'nin_copy',       label:'Copy of National ID (both sides)',accept:'image/*,application/pdf', camera:true },
+      { key:'photo',          label:'Passport-size photo',             accept:'image/*',                 camera:true },
+      { key:'address_proof',  label:'Proof of address (utility bill)', accept:'image/*,application/pdf' },
+      { key:'reference',      label:'Reference letter (optional)',     accept:'image/*,application/pdf', optional:true }
+    ]
+  },
+  {
+    key:'nin_renewal', title:'National ID Renewal', agency:'NIRA',
+    Icon:UserIcon, color:'indigo', fee: 50000, processing:'1-2 weeks',
+    officialUrl:'https://www.nira.go.ug/',
+    applyUrl:'https://www.nira.go.ug/forms',
+    paymentMethod:'URA PRN',
+    instructions:[
+      'Have your old NIN (or police report if lost) and a recent photo ready.',
+      'Open the NIRA portal and complete the renewal form.',
+      'Generate a URA PRN and pay the renewal fee.',
+      'Book a biometric appointment at the nearest NIRA office.'
+    ],
+    fields:[
+      { name:'reason',   label:'Reason for renewal', type:'select', options:['Expired','Lost','Damaged','Name change','Other'] },
+      { name:'urgency',  label:'Urgency', type:'select', options:['Standard (2 weeks)','Express (3 days)'] }
+    ],
+    requiredDocs:[
+      { key:'old_nin',        label:'Old National ID (if available)',  accept:'image/*,application/pdf', camera:true, optional:true },
+      { key:'photo',          label:'Recent passport-size photo',      accept:'image/*',                 camera:true },
+      { key:'police_report',  label:'Police report (if lost/stolen)',  accept:'image/*,application/pdf', optional:true }
+    ]
+  },
+  {
+    key:'birth_cert', title:'Birth Certificate', agency:'NIRA · Civil Registration',
+    Icon:Baby, color:'rose', fee: 30000, processing:'7-10 days',
+    officialUrl:'https://www.nira.go.ug/',
+    applyUrl:'https://www.nira.go.ug/forms',
+    paymentMethod:'URA PRN',
+    instructions:[
+      "Gather the mother's and father's NIN copies and the hospital notification.",
+      'For late registration, get an LC1 letter confirming the child\'s parents.',
+      'Open the NIRA Civil Registration portal and complete the form.',
+      'Generate a URA PRN and pay the certificate fee.',
+      'Collect the certificate from the issuing office.'
+    ],
+    fields:[
+      { name:'reason', label:'Reason', type:'select', options:['New registration','Late registration','Replacement','Correction'] },
+      { name:'place',  label:'Place of birth', type:'text', placeholder:'Hospital or village' },
+      { name:'dob',    label:'Date of birth', type:'date' }
+    ],
+    requiredDocs:[
+      { key:'hospital_notif', label:'Hospital notification of birth',  accept:'image/*,application/pdf', optional:true },
+      { key:'parent_nin1',    label:"Mother's NIN copy",               accept:'image/*,application/pdf', camera:true },
+      { key:'parent_nin2',    label:"Father's NIN copy",               accept:'image/*,application/pdf', camera:true, optional:true },
+      { key:'lc1_letter',     label:'LC1 letter (for late registration)', accept:'image/*,application/pdf', optional:true }
+    ]
+  },
+  {
+    key:'education', title:'Education Verification / Equivalence', agency:'Ministry of Education and Sports',
+    Icon:BookOpenCheck, color:'indigo', fee: 100000, processing:'2-3 weeks',
+    officialUrl:'https://www.education.go.ug/',
+    applyUrl:'https://www.education.go.ug/',
+    paymentMethod:'URA PRN',
+    instructions:[
+      'For verifying O-Level / A-Level / Diploma / Degree certificates, or recognising foreign qualifications.',
+      'Scan the original certificate, transcripts and your NIN copy.',
+      'Open the Ministry of Education portal and request verification or equivalence.',
+      'Generate a URA PRN and pay the verification fee.',
+      'Receive an official letter confirming authenticity or equivalence (issued by MoES).'
+    ],
+    fields:[
+      { name:'certType', label:'Certificate type', type:'select',
+        options:['UCE (O-Level)','UACE (A-Level)','Diploma','Bachelor\'s Degree','Master\'s Degree','PhD','Foreign certificate'] },
+      { name:'institution', label:'Issuing institution', type:'text', placeholder:'e.g. Makerere University' },
+      { name:'year',        label:'Year of completion', type:'text', placeholder:'e.g. 2018' },
+      { name:'purpose',     label:'Purpose of verification', type:'select',
+        options:['Employment','Further studies','Immigration / visa','Professional registration','Other'] }
+    ],
+    requiredDocs:[
+      { key:'certificate',    label:'Original certificate',            accept:'image/*,application/pdf', camera:true },
+      { key:'transcripts',    label:'Academic transcripts',            accept:'image/*,application/pdf' },
+      { key:'nin_copy',       label:'Copy of National ID',             accept:'image/*,application/pdf', camera:true },
+      { key:'photo',          label:'Passport-size photo',             accept:'image/*',                 camera:true, optional:true }
+    ]
+  },
+  {
+    key:'tin', title:'Tax Identification (TIN)', agency:'Uganda Revenue Authority (URA)',
+    Icon:Receipt, color:'violet', fee: 0, processing:'Instant',
+    officialUrl:'https://www.ura.go.ug',
+    applyUrl:'https://efris.ura.go.ug',
+    paymentMethod:'Free',
+    instructions:[
+      'Have your NIN copy ready.',
+      'Open the URA eServices portal.',
+      'Complete the TIN registration form online.',
+      'Your TIN is issued instantly and emailed to you.'
+    ],
+    fields:[
+      { name:'taxpayerType', label:'Taxpayer type', type:'select', options:['Individual','Sole Proprietor','Partnership','Company','NGO'] },
+      { name:'sector',       label:'Economic sector', type:'select', options:['Agriculture','Manufacturing','Trade','Services','Construction','ICT','Other'] }
+    ],
+    requiredDocs:[
+      { key:'nin_copy',       label:'Copy of National ID',             accept:'image/*,application/pdf', camera:true },
+      { key:'photo',          label:'Recent photo',                    accept:'image/*',                 camera:true, optional:true }
+    ]
+  },
+  {
+    key:'business', title:'Business Registration', agency:'Uganda Registration Services Bureau',
+    Icon:Briefcase, color:'sky', fee: 50000, processing:'3-5 days',
+    officialUrl:'https://ursb.go.ug/',
+    applyUrl:'https://obrs.ursb.go.ug/',
+    paymentMethod:'URA PRN',
+    instructions:[
+      'Reserve your proposed business name on the OBRS portal.',
+      'Have all directors\' NIN copies ready.',
+      'Complete the registration form on OBRS.',
+      'Generate a URA PRN and pay the registration fee.',
+      'Download your certificate of registration once approved.'
+    ],
+    fields:[
+      { name:'businessType', label:'Business type', type:'select', options:['Sole Proprietor','Partnership','Limited Company','NGO','Cooperative'] },
+      { name:'sector',       label:'Sector', type:'select', options:['Agriculture','Manufacturing','Trade','Services','Construction','ICT','Tourism'] },
+      { name:'businessName', label:'Proposed business name', type:'text' }
+    ],
+    requiredDocs:[
+      { key:'director_nin1',  label:"Director 1 — NIN copy",           accept:'image/*,application/pdf', camera:true },
+      { key:'director_nin2',  label:"Director 2 — NIN copy (if any)",  accept:'image/*,application/pdf', camera:true, optional:true },
+      { key:'name_reserve',   label:'Name reservation form (if pre-reserved)', accept:'image/*,application/pdf', optional:true },
+      { key:'articles',       label:'Articles of Association (companies only)', accept:'application/pdf,image/*', optional:true }
+    ]
+  },
+  {
+    key:'kcca_license', title:'KCCA Trading License', agency:'Kampala Capital City Authority',
+    Icon:ScrollText, color:'emerald', fee: 200000, processing:'5-10 days',
+    officialUrl:'https://www.kcca.go.ug/',
+    applyUrl:'https://www.kcca.go.ug/trading-licence-rates',
+    paymentMethod:'URA PRN or KCCA bank account',
+    instructions:[
+      'For businesses operating within Kampala (KCCA jurisdiction). For other districts, contact your local Town Council.',
+      'Confirm your trade category and fee on the official KCCA trading licence rates page.',
+      'Prepare URSB business registration, NIN, tenancy / rent agreement, and a photo of your premises.',
+      'Submit the application on the KCCA portal or at your division office.',
+      'Pay via URA PRN or KCCA bank deposit and collect your licence.'
+    ],
+    fields:[
+      { name:'businessName', label:'Business name', type:'text' },
+      { name:'category',     label:'Trade category', type:'select',
+        options:['Retail Shop','Wholesale','Restaurant / Food','Hardware','Salon / Barber','Pharmacy','Clinic','Garage','Bar / Entertainment','Boutique','Stationery','Other'] },
+      { name:'division',     label:'KCCA division', type:'select',
+        options:['Central','Kawempe','Makindye','Nakawa','Rubaga'] },
+      { name:'employees',    label:'Number of employees', type:'select', options:['1','2-5','6-10','11-30','30+'] }
+    ],
+    requiredDocs:[
+      { key:'nin_copy',       label:'Owner / director NIN copy',       accept:'image/*,application/pdf', camera:true },
+      { key:'ursb_cert',      label:'URSB business registration certificate', accept:'image/*,application/pdf' },
+      { key:'tenancy',        label:'Tenancy / rent agreement',        accept:'image/*,application/pdf' },
+      { key:'premises_photo', label:'Photo of business premises',      accept:'image/*',                 camera:true },
+      { key:'plan',           label:'Layout / site plan',              accept:'image/*,application/pdf', optional:true }
+    ]
+  },
+  {
+    key:'nema', title:'NEMA Environmental Certificate', agency:'National Environment Management Authority',
+    Icon:Leaf, color:'emerald', fee: 500000, processing:'4-8 weeks',
+    officialUrl:'https://www.nema.go.ug/en/',
+    applyUrl:'https://www.nema.go.ug/en/',
+    paymentMethod:'Bank deposit to NEMA collection account',
+    instructions:[
+      'Required for projects with environmental impact: construction, factories, mines, agriculture-at-scale, waste disposal.',
+      'Prepare a project brief or full Environmental Impact Assessment (EIA) by a certified NEMA practitioner.',
+      'Attach site plan, location maps, NIN copy, and URSB business registration.',
+      'Submit the application on the NEMA website (or in person at NEMA headquarters).',
+      'NEMA reviews the project, may require public consultations, and issues an Environmental Certificate.'
+    ],
+    fields:[
+      { name:'projectType', label:'Project type', type:'select',
+        options:['Construction / building','Industrial / factory','Mining / quarrying','Agricultural / agro-processing','Waste management','Energy (solar / hydro / biomass)','Tourism / hospitality','Other'] },
+      { name:'scale',       label:'Project scale', type:'select', options:['Small (community)','Medium','Large','Strategic / national'] },
+      { name:'location',    label:'Project location', type:'text', placeholder:'District, sub-county, village' },
+      { name:'eiaRequired', label:'Has a full EIA been completed?', type:'checkbox' }
+    ],
+    requiredDocs:[
+      { key:'project_brief',  label:'Project brief',                   accept:'image/*,application/pdf' },
+      { key:'eia_report',     label:'EIA report (if required)',        accept:'application/pdf,image/*', optional:true },
+      { key:'site_plan',      label:'Site plan',                       accept:'image/*,application/pdf' },
+      { key:'nin_copy',       label:'Proponent NIN copy',              accept:'image/*,application/pdf', camera:true },
+      { key:'ursb_cert',      label:'URSB business registration (if a company)', accept:'image/*,application/pdf', optional:true }
+    ]
+  },
+  {
+    key:'land', title:'Land Title Search', agency:'Ministry of Lands',
+    Icon:MapPinned, color:'amber', fee: 25000, processing:'5-10 days',
+    officialUrl:'https://mlhud.go.ug',
+    applyUrl:'https://nlis.go.ug',
+    paymentMethod:'Bank deposit to Ministry account',
+    instructions:[
+      'Have the plot or LRV number, sub-county, and your NIN copy ready.',
+      'Visit the National Land Information System (NLIS).',
+      'Submit a search request — pay via bank deposit.',
+      'Receive the title status report within 5-10 working days.'
+    ],
+    fields:[
+      { name:'plotNumber', label:'Plot or LRV number', type:'text', placeholder:'e.g. FRV-1234' },
+      { name:'subcounty',  label:'Sub-county', type:'text' },
+      { name:'purpose',    label:'Purpose', type:'select', options:['Verification before purchase','Title transfer','Mortgage','Subdivision','Lease application'] }
+    ],
+    requiredDocs:[
+      { key:'nin_copy',       label:'Copy of National ID',             accept:'image/*,application/pdf', camera:true },
+      { key:'old_title',      label:'Existing title or agreement (if available)', accept:'image/*,application/pdf', optional:true },
+      { key:'sketch_map',     label:'Sketch map or location reference',accept:'image/*,application/pdf', optional:true }
+    ]
+  },
+  {
+    key:'nssf', title:'NSSF Statement', agency:'National Social Security Fund',
+    Icon:Landmark, color:'emerald', fee: 0, processing:'Instant',
+    officialUrl:'https://www.nssfug.org/',
+    applyUrl:'https://www.nssfug.org/',
+    paymentMethod:'Free',
+    instructions:[
+      'Open the NSSF Uganda website (nssfug.org).',
+      'Click "Member Login" or download the NSSF Go app.',
+      'Log in with your NSSF number or NIN.',
+      'Request your statement — emailed within minutes.'
+    ],
+    fields:[
+      { name:'period',  label:'Statement period', type:'select', options:['Last 6 months','Last 12 months','Last 3 years','Full history'] },
+      { name:'delivery',label:'Delivery method', type:'select', options:['Email','Pick up at branch','Download via app'] }
+    ],
+    requiredDocs:[
+      { key:'nin_copy',       label:'Copy of National ID',             accept:'image/*,application/pdf', camera:true },
+      { key:'nssf_card',      label:'NSSF card (if available)',        accept:'image/*,application/pdf', camera:true, optional:true }
+    ]
+  },
+  {
+    key:'electricity', title:'Electricity Connection', agency:'Uganda Electricity Distribution Company (UEDCL)',
+    Icon:Zap, color:'amber', fee: 250000, processing:'2-4 weeks',
+    officialUrl:'https://www.uedcl.co.ug/',
+    applyUrl:'https://www.uedcl.co.ug/',
+    paymentMethod:'Bank deposit or Mobile Money (Yaka)',
+    instructions:[
+      'Have your NIN copy, proof of property ownership / tenancy, and a sketch map of the site ready.',
+      'Open the UEDCL website and submit a new connection application form.',
+      'Pay the survey fee — UEDCL will inspect your site and quote the connection cost.',
+      'After paying the quotation, UEDCL installs a Yaka prepaid meter at your premises.',
+      'Buy electricity units (Yaka) any time via Mobile Money, banks, or the MyUMEME app.'
+    ],
+    fields:[
+      { name:'serviceType', label:'Service type', type:'select',
+        options:['New connection (residential)','New connection (commercial)','Bill payment / buy Yaka units','Report power outage','Meter relocation'] },
+      { name:'siteAddress', label:'Site address', type:'text', placeholder:'Plot / Village / Town' },
+      { name:'subcounty',   label:'Sub-county', type:'text' }
+    ],
+    requiredDocs:[
+      { key:'nin_copy',       label:'Copy of National ID',             accept:'image/*,application/pdf', camera:true },
+      { key:'ownership',      label:'Proof of ownership or tenancy agreement', accept:'image/*,application/pdf' },
+      { key:'site_sketch',    label:'Sketch map of the site',          accept:'image/*,application/pdf', camera:true },
+      { key:'photo',          label:'Recent passport-size photo',      accept:'image/*',                 camera:true, optional:true }
+    ]
+  },
+  {
+    key:'ucc', title:'UCC Type Approval / Consumer Service', agency:'Uganda Communications Commission',
+    Icon:Radio, color:'rose', fee: 0, processing:'Varies by request',
+    officialUrl:'https://www.ucc.co.ug/',
+    applyUrl:'https://www.ucc.co.ug/',
+    paymentMethod:'URA PRN (for type approval fees) · Free for consumer complaints',
+    instructions:[
+      'Use this for: equipment type approval, telecom complaints, SIM-card issues, broadcasting licences.',
+      'For complaints: gather evidence (screenshots, SMS, call logs).',
+      'For type approval: prepare device datasheets, manufacturer documents, and importer details.',
+      'Submit your request on the UCC website or at UCC headquarters in Bugolobi.',
+      'For paid services, generate a URA PRN at the point of submission.'
+    ],
+    fields:[
+      { name:'requestType', label:'Type of request', type:'select',
+        options:['Consumer complaint (network / billing)','SIM card / mobile money fraud','Equipment type approval','Broadcasting / radio licence','Telecom licence inquiry','Internet service complaint','Other'] },
+      { name:'operator',    label:'Operator / network (if applicable)', type:'select',
+        options:['—','MTN','Airtel','Lycamobile','Africell','Roke Telkom','UCS','Other'] },
+      { name:'description', label:'Brief description', type:'text', placeholder:'What happened or what device are you approving?' }
+    ],
+    requiredDocs:[
+      { key:'nin_copy',       label:'Copy of National ID',             accept:'image/*,application/pdf', camera:true },
+      { key:'evidence',       label:'Evidence (screenshots, SMS, call logs)', accept:'image/*,application/pdf', optional:true },
+      { key:'device_doc',     label:'Device datasheet (for type approval)', accept:'application/pdf,image/*', optional:true }
+    ]
+  },
+  {
+    key:'mobile_money', title:'Mobile Money Registration', agency:'MTN / Airtel',
+    Icon:Smartphone, color:'rose', fee: 0, processing:'Instant',
+    officialUrl:'https://www.mtn.co.ug',
+    providerPortals:{
+      'MTN MoMo':     'https://www.mtn.co.ug/momo',
+      'Airtel Money': 'https://www.airtel.co.ug/airtelmoney'
+    },
+    paymentMethod:'Free',
+    instructions:[
+      'Visit the nearest registered MTN or Airtel agent with your NIN and SIM card.',
+      'Or use the providerʼs USSD: *165# (MTN) or *185# (Airtel) to activate Mobile Money.',
+      'Keep your PIN safe. Never share it with anyone — not even an agent.'
+    ],
+    fields:[
+      { name:'provider',label:'Provider', type:'select', options:['MTN MoMo','Airtel Money'] },
+      { name:'simNumber', label:'SIM card number', type:'text', placeholder:'+256 7XX XXX XXX' }
+    ],
+    requiredDocs:[
+      { key:'nin_copy',       label:'Copy of National ID',             accept:'image/*,application/pdf', camera:true },
+      { key:'selfie',         label:'Selfie holding your NIN',         accept:'image/*',                 camera:true }
+    ]
+  }
+];
+
+const APPLICATION_STATUSES = ['Submitted','Under Review','Approved','Rejected','Issued','Cancelled'];
 
 const fmtUGX = (n) => n === 0 ? 'Free' : `UGX ${Number(n).toLocaleString()}`;
 const fmtNum = (n) => {
@@ -704,9 +1135,14 @@ function Sidebar({ section, setSection, user, onLogout, open, setOpen }) {
       { key:'overview',  label:'Overview',     Icon:LayoutDashboard }
     ]},
     { group:'Records', items:[
-      { key:'students',  label:'Students',     Icon:GraduationCap },
-      { key:'hospitals', label:'Hospitals',    Icon:Hospital },
-      { key:'families',  label:'Family Trees', Icon:Users2 }
+      { key:'students',  label:'Students',       Icon:GraduationCap },
+      { key:'hospitals', label:'Hospitals',      Icon:Hospital },
+      { key:'families',  label:'Family Trees',   Icon:Users2 },
+      { key:'citizens',  label:'Citizen Search', Icon:Search }
+    ]},
+    { group:'Services', items:[
+      { key:'services',     label:'Service Portal', Icon:Layers },
+      { key:'applications', label:'Applications',   Icon:FileText }
     ]},
     { group:'Insights', items:[
       { key:'reports',   label:'Reports',      Icon:FileText },
@@ -1791,7 +2227,7 @@ function StudentsPage({ students, dispatch, user, pushToast, audit, addAudit, op
 
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[800px]">
             <thead className="bg-slate-50 text-slate-600">
               <tr>
                 {[
@@ -1976,7 +2412,7 @@ function HospitalsPage({ hospitals, dispatch, user, pushToast, addAudit }) {
 
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[800px]">
             <thead className="bg-slate-50 text-slate-600">
               <tr>
                 {[['name','Facility'],['level','Level'],['district','District'],['inCharge','In-charge'],['beds','Beds'],['activePatients','Active Patients'],['stock','Drug Stock'],['lastInspection','Last Inspection']].map(([k,l])=>(
@@ -2243,7 +2679,7 @@ function FamiliesPage({ families, students, hospitals, dispatch, user, pushToast
 
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[800px]">
             <thead className="bg-slate-50 text-slate-600">
               <tr>
                 {[['head','Family Head'],['nin','NIN'],['clan','Clan'],['tribe','Tribe'],['village','Village'],['district','District'],['members','Members'],['marriage','Marriage']].map(([k,l])=>(
@@ -2465,7 +2901,7 @@ function AuditPage({ audit, user, pushToast }) {
 
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[800px]">
             <thead className="bg-slate-50 text-slate-600">
               <tr>
                 {[['ts','Timestamp'],['action','Action'],['module','Module'],['record','Record'],['by','Performed By'],['role','Role'],['district','District']].map(([k,l])=>(
@@ -2586,7 +3022,7 @@ function RolesPage({ admins, dispatch, user, pushToast, addAudit }) {
 
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm min-w-[800px]">
             <thead className="bg-slate-50 text-slate-600">
               <tr>
                 {['Name','Username','Role','District','Status','Actions'].map(h =>
@@ -2846,6 +3282,8 @@ function SettingsPage({ settings, setSettings, user, pushToast, students, hospit
           <Stat label="Audit entries" value={audit.length} />
         </div>
       </div>
+
+      {dbConnected && user.role === 'Super Admin' && <SetupWizard pushToast={pushToast} />}
 
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
         <div className="px-5 py-4 border-b border-slate-200 font-semibold text-slate-900 flex items-center gap-2">
@@ -4173,6 +4611,1064 @@ function BillingPage({ settings, setSettings, billing, state, pushToast, addAudi
 }
 
 /* ===========================================================
+   Document upload — single slot for one required document
+   =========================================================== */
+function DocumentSlot({ doc, value, onChange, applicationRef, pushToast }) {
+  const [uploading, setUploading] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (value && value.path && supabaseConfigured) {
+      getDocumentSignedUrl(value.path).then(url => { if (!cancelled) setPreview(url); });
+    } else { setPreview(null); }
+    return () => { cancelled = true; };
+  }, [value]);
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    if (!supabaseConfigured) {
+      // Demo mode — just store locally as preview
+      const url = URL.createObjectURL(file);
+      onChange({ name:file.name, size:file.size, type:file.type, path:url, demo:true, uploadedAt:new Date().toISOString() });
+      pushToast('info', 'Saved locally (demo mode — no real upload)');
+      return;
+    }
+    setUploading(true);
+    try {
+      const uploaded = await uploadDocument(file, applicationRef, doc.key);
+      onChange(uploaded);
+      pushToast('success', `${doc.label} uploaded`);
+    } catch (e) {
+      pushToast('error', e.message);
+    } finally { setUploading(false); }
+  };
+
+  const remove = async () => {
+    if (value?.path && !value.demo && supabaseConfigured) {
+      try { await deleteDocument(value.path); } catch {}
+    }
+    onChange(null);
+  };
+
+  const isImage = value?.type?.startsWith('image/');
+
+  return (
+    <div className={`border-2 border-dashed rounded-xl p-3 transition ${
+      value ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-300 hover:border-uinr/40 bg-slate-50/40'
+    }`}>
+      <div className="flex items-start gap-3">
+        <div className={`p-2 rounded-lg shrink-0 ${value ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-500'}`}>
+          {value ? <FileCheck size={18} /> : <Paperclip size={18} />}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-semibold text-slate-800">{doc.label}</span>
+            {doc.optional && <span className="text-[10px] uppercase tracking-wider font-bold text-slate-400">Optional</span>}
+          </div>
+          {value ? (
+            <div className="text-xs text-slate-600 mt-1 flex items-center gap-2 flex-wrap">
+              <span className="font-mono truncate max-w-[180px]">{value.name}</span>
+              <span className="text-slate-400">·</span>
+              <span>{(value.size / 1024).toFixed(0)} KB</span>
+              {preview && isImage && (
+                <a href={preview} target="_blank" rel="noopener noreferrer" className="text-uinr font-semibold hover:underline">View</a>
+              )}
+              {preview && !isImage && (
+                <a href={preview} target="_blank" rel="noopener noreferrer" className="text-uinr font-semibold hover:underline">Open PDF</a>
+              )}
+              <button type="button" onClick={remove} className="text-rose-600 font-semibold hover:underline">Remove</button>
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500 mt-1">Accept: {doc.accept.includes('pdf') ? 'JPG, PNG, or PDF' : 'JPG, PNG'} · max 10 MB</div>
+          )}
+        </div>
+      </div>
+
+      {value && isImage && preview && (
+        <img src={preview} alt={doc.label} className="mt-3 max-h-32 rounded-lg border border-slate-200 object-contain bg-white" />
+      )}
+
+      {!value && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <input ref={fileInputRef} type="file" accept={doc.accept} className="hidden"
+            onChange={e => handleFile(e.target.files?.[0])} />
+          <button type="button" onClick={()=>fileInputRef.current?.click()} disabled={uploading}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold hover:bg-slate-50 disabled:opacity-60">
+            {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+            {uploading ? 'Uploading…' : 'Choose file'}
+          </button>
+          {doc.camera && (
+            <>
+              <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden"
+                onChange={e => handleFile(e.target.files?.[0])} />
+              <button type="button" onClick={()=>cameraInputRef.current?.click()} disabled={uploading}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-uinr text-white rounded-lg text-xs font-semibold hover:bg-uinr-dark disabled:opacity-60">
+                <Camera size={12} /> Use camera
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ===========================================================
+   Citizen Search — unified lookup by NIN, name, phone, district
+   =========================================================== */
+function CitizenSearchPage({ state, openProfile, setSection }) {
+  const [q, setQ] = useState('');
+  const [tab, setTab] = useState('all');
+
+  const results = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    if (!term) return null;
+    const matches = (val) => val && String(val).toLowerCase().includes(term);
+
+    const studentHits = state.students.filter(s =>
+      matches(s.name) || matches(s.nin) || matches(s.phone) || matches(s.district) ||
+      matches(s.school) || matches(s.guardianNin)
+    ).map(s => ({ kind:'Student', record:s }));
+
+    const familyHits = state.families.filter(f =>
+      matches(f.head) || matches(f.nin) || matches(f.phone) || matches(f.district) ||
+      matches(f.village) || matches(f.clan) || matches(f.tribe)
+    ).map(f => ({ kind:'Family head', record:f }));
+
+    const applicationHits = (state.applications || []).filter(a =>
+      matches(a.citizenName) || matches(a.citizenNin) || matches(a.citizenPhone) ||
+      matches(a.district) || matches(a.reference) || matches(a.serviceType)
+    ).map(a => ({ kind:'Application', record:a }));
+
+    // Family-tree members (grandparents / parents / children)
+    const treeHits = [];
+    state.families.forEach(f => {
+      ['grandparents','parents','children'].forEach(gen => {
+        (f.tree?.[gen] || []).forEach(p => {
+          if (matches(p.name) || matches(p.nin)) {
+            treeHits.push({ kind:'Family member', record:{ ...p, district:f.district, family:f.head, generation:gen } });
+          }
+        });
+      });
+    });
+
+    return { studentHits, familyHits, applicationHits, treeHits };
+  }, [q, state.students, state.families, state.applications]);
+
+  const totalCount = results
+    ? results.studentHits.length + results.familyHits.length + results.applicationHits.length + results.treeHits.length
+    : 0;
+
+  const tabs = [
+    { key:'all',          label:'All',           count: totalCount },
+    { key:'students',     label:'Students',      count: results?.studentHits.length || 0 },
+    { key:'families',     label:'Family heads',  count: results?.familyHits.length || 0 },
+    { key:'tree',         label:'Family members',count: results?.treeHits.length || 0 },
+    { key:'applications', label:'Applications',  count: results?.applicationHits.length || 0 }
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="bg-gradient-to-r from-uinr-dark to-uinr-light text-white rounded-2xl p-6 shadow-lg">
+        <div className="flex items-center gap-2 text-white/70 text-xs uppercase tracking-widest"><Search size={12} /> Citizen lookup</div>
+        <h2 className="text-2xl font-bold mt-2">Find any citizen in seconds</h2>
+        <p className="text-sm text-white/80 mt-1">Search by name, NIN, mobile number, district, school, application reference — anything.</p>
+
+        <div className="mt-5 relative">
+          <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-white/60" />
+          <input value={q} onChange={e=>setQ(e.target.value)}
+            autoFocus
+            placeholder="e.g. Nakato Sarah · CM00090000001UG · +256700111222 · Gulu · UINR-2026-AB12CD"
+            className="w-full pl-12 pr-4 py-3.5 bg-white/15 backdrop-blur border border-white/20 rounded-xl text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-white/40 text-sm" />
+        </div>
+      </div>
+
+      {!q.trim() && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-slate-500">
+          <Search size={32} className="mx-auto mb-3 text-slate-300" />
+          <div className="font-semibold text-slate-700">Start typing to search the registry</div>
+          <div className="text-xs mt-1">Searches across {fmtNum(state.students.length)} students, {fmtNum(state.families.length)} families, {fmtNum((state.applications||[]).length)} applications.</div>
+        </div>
+      )}
+
+      {q.trim() && (
+        <>
+          <div className="flex flex-wrap gap-2 border-b border-slate-200">
+            {tabs.map(t => (
+              <button key={t.key} onClick={()=>setTab(t.key)}
+                className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition ${
+                  tab === t.key ? 'border-uinr text-uinr' : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}>
+                {t.label}
+                <span className={`ml-2 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                  tab === t.key ? 'bg-uinr/10 text-uinr' : 'bg-slate-100 text-slate-500'
+                }`}>{t.count}</span>
+              </button>
+            ))}
+          </div>
+
+          {totalCount === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-slate-500">
+              <FileQuestion size={32} className="mx-auto mb-3 text-slate-300" />
+              <div className="font-semibold text-slate-700">No matches for "{q}"</div>
+              <div className="text-xs mt-1">Try fewer or different keywords.</div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {(tab === 'all' || tab === 'students') && results.studentHits.map((m, i) => (
+                <button key={`s-${i}`} onClick={()=>openProfile({ name: m.record.name, nin: m.record.nin })}
+                  className="w-full text-left bg-white border border-slate-200 rounded-xl p-4 hover:border-uinr/40 hover:shadow-md transition flex items-center gap-4">
+                  <div className="bg-sky-100 text-sky-700 p-2.5 rounded-xl"><GraduationCap size={18} /></div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-slate-900">{m.record.name}</span>
+                      <Badge kind="blue">Student</Badge>
+                      <Badge kind={statusKind(m.record.status)}>{m.record.status}</Badge>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-3">
+                      <span><span className="font-mono">{m.record.nin || '—'}</span></span>
+                      <span><MapPin size={10} className="inline mr-0.5" /> {m.record.district}</span>
+                      <span>{m.record.school}</span>
+                      <span>{m.record.level}</span>
+                      {m.record.phone && <span><Phone size={10} className="inline mr-0.5" /> {m.record.phone}</span>}
+                    </div>
+                  </div>
+                  <ChevronRight size={16} className="text-slate-400" />
+                </button>
+              ))}
+
+              {(tab === 'all' || tab === 'families') && results.familyHits.map((m, i) => (
+                <button key={`f-${i}`} onClick={()=>{ setSection('families'); }}
+                  className="w-full text-left bg-white border border-slate-200 rounded-xl p-4 hover:border-uinr/40 hover:shadow-md transition flex items-center gap-4">
+                  <div className="bg-indigo-100 text-indigo-700 p-2.5 rounded-xl"><Users2 size={18} /></div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-slate-900">{m.record.head}</span>
+                      <Badge kind="blue">Family head</Badge>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-3">
+                      <span><span className="font-mono">{m.record.nin || '—'}</span></span>
+                      <span><MapPin size={10} className="inline mr-0.5" /> {m.record.district} · {m.record.village}</span>
+                      <span>{m.record.clan} clan</span>
+                      <span>{m.record.members} members</span>
+                    </div>
+                  </div>
+                  <ChevronRight size={16} className="text-slate-400" />
+                </button>
+              ))}
+
+              {(tab === 'all' || tab === 'tree') && results.treeHits.map((m, i) => (
+                <button key={`t-${i}`} onClick={()=>openProfile({ name: m.record.name, nin: m.record.nin })}
+                  className="w-full text-left bg-white border border-slate-200 rounded-xl p-4 hover:border-uinr/40 hover:shadow-md transition flex items-center gap-4">
+                  <div className="bg-violet-100 text-violet-700 p-2.5 rounded-xl"><Network size={18} /></div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-slate-900">{m.record.name}</span>
+                      <Badge kind="gray">{m.record.generation}</Badge>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-3">
+                      <span className="font-mono">{m.record.nin || '—'}</span>
+                      <span>Family of {m.record.family}</span>
+                      <span><MapPin size={10} className="inline mr-0.5" /> {m.record.district}</span>
+                    </div>
+                  </div>
+                  <ChevronRight size={16} className="text-slate-400" />
+                </button>
+              ))}
+
+              {(tab === 'all' || tab === 'applications') && results.applicationHits.map((m, i) => (
+                <button key={`a-${i}`} onClick={()=>setSection('applications')}
+                  className="w-full text-left bg-white border border-slate-200 rounded-xl p-4 hover:border-uinr/40 hover:shadow-md transition flex items-center gap-4">
+                  <div className="bg-amber-100 text-amber-700 p-2.5 rounded-xl"><FileText size={18} /></div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-slate-900">{m.record.citizenName}</span>
+                      <Badge kind="blue">{m.record.serviceType}</Badge>
+                      <Badge kind={statusKind(m.record.status)}>{m.record.status}</Badge>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-3">
+                      <span className="font-mono">{m.record.reference}</span>
+                      <span className="font-mono">{m.record.citizenNin || '—'}</span>
+                      <span><MapPin size={10} className="inline mr-0.5" /> {m.record.district}</span>
+                      <span>Submitted {m.record.submittedAt}</span>
+                    </div>
+                  </div>
+                  <ChevronRight size={16} className="text-slate-400" />
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ===========================================================
+   Services Hub — 10 government services
+   =========================================================== */
+const SERVICE_COLOR = {
+  sky:    { iconBg:'bg-sky-100 text-sky-700',         ring:'ring-sky-100',     grad:'from-sky-50/60' },
+  amber:  { iconBg:'bg-amber-100 text-amber-700',     ring:'ring-amber-100',   grad:'from-amber-50/60' },
+  emerald:{ iconBg:'bg-emerald-100 text-emerald-700', ring:'ring-emerald-100', grad:'from-emerald-50/60' },
+  rose:   { iconBg:'bg-rose-100 text-rose-700',       ring:'ring-rose-100',    grad:'from-rose-50/60' },
+  indigo: { iconBg:'bg-indigo-100 text-indigo-700',   ring:'ring-indigo-100',  grad:'from-indigo-50/60' },
+  violet: { iconBg:'bg-violet-100 text-violet-700',   ring:'ring-violet-100',  grad:'from-violet-50/60' }
+};
+
+function ServicesHubPage({ state, user, dispatch, pushToast, addAudit }) {
+  const [applying, setApplying] = useState(null);
+
+  const my = (state.applications || []).filter(a =>
+    a.citizenName === user.name || a.citizenEmail === user.email
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-gradient-to-r from-uinr-dark to-uinr-light text-white rounded-2xl p-6 shadow-lg">
+        <div className="flex items-center gap-2 text-white/70 text-xs uppercase tracking-widest"><Layers size={12} /> Government services navigator</div>
+        <h2 className="text-2xl font-bold mt-2">Every service. One place to start.</h2>
+        <p className="text-sm text-white/80 mt-1 max-w-2xl">
+          UINR prepares your documents and links you directly to the official agency portal — NIRA, URA, URSB, NSSF, and the rest.
+          You always pay the agency directly. We never touch government fees.
+        </p>
+        <div className="mt-3 flex items-center gap-3 text-xs">
+          <span className="bg-emerald-400/20 text-emerald-200 px-2.5 py-1 rounded-full font-semibold flex items-center gap-1">
+            <ShieldCheck size={11} /> Official portal links
+          </span>
+          <span className="bg-white/10 px-2.5 py-1 rounded-full font-semibold flex items-center gap-1">
+            <FileCheck size={11} /> Document locker
+          </span>
+          <span className="bg-white/10 px-2.5 py-1 rounded-full font-semibold flex items-center gap-1">
+            <Activity size={11} /> Status tracking
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {SERVICES.map(s => {
+          const palette = SERVICE_COLOR[s.color] || SERVICE_COLOR.sky;
+          const myCount = my.filter(a => a.serviceType === s.title).length;
+          return (
+            <button key={s.key} onClick={()=>setApplying(s)}
+              className={`group relative overflow-hidden text-left bg-white border border-slate-200 rounded-2xl p-5 hover:shadow-lg hover:border-uinr/30 hover:-translate-y-0.5 transition-all`}>
+              <div className={`absolute -top-10 -right-10 w-32 h-32 rounded-full bg-gradient-to-br ${palette.grad} to-transparent opacity-70 pointer-events-none`} />
+              <div className="relative">
+                <div className="flex items-start justify-between mb-3">
+                  <div className={`p-2.5 rounded-xl ring-4 ${palette.ring} ${palette.iconBg}`}>
+                    <s.Icon size={20} />
+                  </div>
+                  {myCount > 0 && (
+                    <span className="text-[10px] font-bold bg-uinr text-white px-2 py-0.5 rounded-full">{myCount} of yours</span>
+                  )}
+                </div>
+                <div className="font-bold text-slate-900">{s.title}</div>
+                <div className="text-xs text-slate-500 mt-0.5">{s.agency}</div>
+                <div className="mt-3 flex items-center justify-between text-xs">
+                  <span className="text-slate-600 font-semibold">Official fee {fmtUGX(s.fee)}</span>
+                  <span className="text-slate-500">{s.processing}</span>
+                </div>
+                <div className="mt-4 flex items-center gap-1.5 text-xs font-bold text-uinr">
+                  Prepare &amp; open portal <ArrowRight size={12} className="group-hover:translate-x-0.5 transition-transform" />
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {applying && (
+        <ServiceApplicationModal service={applying} user={user} dispatch={dispatch} addAudit={addAudit}
+          pushToast={pushToast} onClose={()=>setApplying(null)} />
+      )}
+    </div>
+  );
+}
+
+function ServiceApplicationModal({ service, user, dispatch, pushToast, addAudit, onClose }) {
+  // Draft reference used to organize uploaded files before submit
+  const draftRef = useMemo(() => 'DRAFT-' + Math.random().toString(36).slice(2, 10).toUpperCase(), []);
+  const [f, setF] = useState({
+    citizenName: user.name,
+    citizenNin: '',
+    citizenPhone: '',
+    citizenEmail: user.email || '',
+    district: user.district || 'Kampala',
+    data: Object.fromEntries((service.fields || []).map(f => [f.name, f.type === 'checkbox' ? false : '']))
+  });
+  const [docs, setDocs] = useState({}); // { docKey: { path, name, size, ... } }
+  const [saving, setSaving] = useState(false);
+  const [result, setResult] = useState(null);
+  const update = (k, v) => setF(s => ({ ...s, [k]: v }));
+  const updateData = (k, v) => setF(s => ({ ...s, data: { ...s.data, [k]: v } }));
+
+  const [externalRef, setExternalRef] = useState('');
+  const requiredDocs = service.requiredDocs || [];
+  const requiredMissing = requiredDocs.filter(d => !d.optional && !docs[d.key]);
+  const canSubmit = requiredMissing.length === 0;
+
+  // Pick the right portal URL depending on user selection (e.g., chosen bank)
+  const portalUrl = useMemo(() => {
+    if (service.bankPortals && f.data.bank) return service.bankPortals[f.data.bank];
+    if (service.providerPortals && f.data.provider) return service.providerPortals[f.data.provider];
+    return service.applyUrl || service.officialUrl;
+  }, [service, f.data.bank, f.data.provider]);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!canSubmit) { pushToast('error', `Upload ${requiredMissing.length} required document(s) first`); return; }
+    setSaving(true);
+    try {
+      const payload = {
+        citizenName: f.citizenName, citizenNin: f.citizenNin,
+        citizenPhone: f.citizenPhone, citizenEmail: f.citizenEmail,
+        district: f.district, serviceType: service.title,
+        status: externalRef ? 'Under Review' : 'Submitted',
+        data: {
+          ...f.data,
+          documents: docs,
+          agencyReference: externalRef || null,
+          officialPortal: portalUrl
+        }
+      };
+      await dispatch({ type:'APP_ADD', payload });
+      addAudit('Created', 'Applications', `${service.title} for ${f.citizenName}`, user);
+      // Pull the latest one to show the reference (the dispatch updates state)
+      setTimeout(() => {
+        const created = { ...payload, reference: 'UINR-' + new Date().getFullYear() + '-' + Math.random().toString(36).slice(2,8).toUpperCase() };
+        setResult(created);
+        pushToast('success', `Application submitted — ${service.title}`);
+      }, 100);
+    } catch (e) {
+      pushToast('error', e.message);
+    } finally { setSaving(false); }
+  };
+
+  if (result) {
+    return (
+      <Modal open onClose={onClose} title="Saved to UINR" wide
+        footer={<>
+          {portalUrl && (
+            <a href={portalUrl} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-uinr text-white hover:bg-uinr-dark">
+              Continue on {service.agency.split('·')[0].trim()} portal <ArrowRight size={14} />
+            </a>
+          )}
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Done</button>
+        </>}>
+        <div className="space-y-4">
+          <div className="text-center">
+            <div className="w-16 h-16 mx-auto bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center mb-3">
+              <CheckCircle2 size={32} />
+            </div>
+            <div className="font-bold text-slate-900 text-lg">Saved to UINR</div>
+            <div className="text-sm text-slate-600 mt-1 max-w-md mx-auto">
+              Your documents and details are stored securely. Now go to the official {service.agency.split('·')[0].trim()} portal to actually submit and pay.
+            </div>
+          </div>
+
+          <div className="border border-slate-200 rounded-lg overflow-hidden">
+            <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Your UINR tracking reference</span>
+            </div>
+            <div className="px-4 py-3 flex items-center justify-between gap-3">
+              <span className="font-mono text-lg font-bold text-slate-900">{result.reference}</span>
+              <button onClick={()=>{ navigator.clipboard.writeText(result.reference); pushToast('success', 'Reference copied'); }}
+                className="text-xs font-semibold text-uinr hover:underline">Copy</button>
+            </div>
+            <div className="px-4 pb-3 text-[11px] text-slate-500">
+              This reference is for UINR's records. The {service.agency.split('·')[0].trim()} portal will issue its own reference once you submit there.
+            </div>
+          </div>
+
+          {portalUrl && (
+            <div className="bg-gradient-to-r from-uinr to-uinr-light text-white rounded-xl p-5">
+              <div className="text-xs font-bold uppercase tracking-widest text-white/70 mb-2">Next step</div>
+              <div className="text-sm text-white/90 mb-3">
+                Continue your application on the official {service.agency.split('·')[0].trim()} website. Your documents are already prepared.
+              </div>
+              <a href={portalUrl} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 bg-white text-uinr font-bold px-5 py-2.5 rounded-lg hover:bg-amber-50 transition">
+                Open {service.agency.split('·')[0].trim()} portal <ArrowRight size={16} />
+              </a>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <Stat label="Official fee" value={fmtUGX(service.fee)} />
+            <Stat label="Processing time" value={service.processing} />
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Apply for ${service.title}`} wide
+      footer={<>
+        <div className="text-xs text-slate-500 mr-auto">
+          {requiredDocs.length > 0 && (
+            canSubmit
+              ? <span className="text-emerald-700 font-semibold flex items-center gap-1"><CheckCircle2 size={12} /> All required documents attached</span>
+              : <span className="text-amber-700 font-semibold flex items-center gap-1"><AlertTriangle size={12} /> {requiredMissing.length} required document{requiredMissing.length>1?'s':''} missing</span>
+          )}
+        </div>
+        <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50">Cancel</button>
+        <button form="apply-form" type="submit" disabled={saving || !canSubmit}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-uinr text-white hover:bg-uinr-dark disabled:opacity-60 disabled:cursor-not-allowed">
+          {saving ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+          Submit Application
+        </button>
+      </>}>
+      <form id="apply-form" onSubmit={submit} className="space-y-5">
+        <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex items-start gap-3">
+          <div className={`p-2.5 rounded-lg ${SERVICE_COLOR[service.color]?.iconBg}`}><service.Icon size={18} /></div>
+          <div className="flex-1">
+            <div className="font-bold text-slate-900">{service.title}</div>
+            <div className="text-xs text-slate-600 mt-0.5">{service.agency} · Official fee {fmtUGX(service.fee)} (paid directly to the agency) · Processing {service.processing}</div>
+            {service.paymentMethod && (
+              <div className="text-[11px] text-slate-500 mt-1">
+                <span className="font-semibold">Payment:</span> {service.paymentMethod}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* How it works */}
+        {service.instructions?.length > 0 && (
+          <div className="bg-sky-50/60 border border-sky-200 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Info size={14} className="text-sky-700" />
+              <span className="text-xs font-bold uppercase tracking-wider text-sky-900">How to apply</span>
+            </div>
+            <ol className="space-y-2 text-sm text-slate-700">
+              {service.instructions.map((step, i) => (
+                <li key={i} className="flex items-start gap-2.5">
+                  <span className="bg-sky-100 text-sky-700 w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">{i+1}</span>
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ol>
+            <div className="text-[11px] text-sky-900/80 mt-3 pl-7 border-t border-sky-200/60 pt-3">
+              <span className="font-semibold">Important:</span> UINR does <span className="underline">not</span> collect government fees. Pay the agency directly through the channel above. UINR only helps you prepare and track.
+            </div>
+          </div>
+        )}
+
+        <div>
+          <div className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Citizen details</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label="Full name"><input className={inputCls} value={f.citizenName} onChange={e=>update('citizenName', e.target.value)} required /></Field>
+            <Field label="NIN (optional)"><input className={inputCls} value={f.citizenNin} onChange={e=>update('citizenNin', e.target.value)} placeholder="Leave blank if not yet issued" /></Field>
+            <Field label="Mobile number"><input className={inputCls} value={f.citizenPhone} onChange={e=>update('citizenPhone', e.target.value)} placeholder="+256 7XX XXX XXX" required /></Field>
+            <Field label="Email (optional)"><input type="email" className={inputCls} value={f.citizenEmail} onChange={e=>update('citizenEmail', e.target.value)} /></Field>
+            <Field label="District">
+              <SearchableSelect value={f.district} onChange={(v)=>update('district', v)} options={DISTRICTS} placeholder="Search districts…" />
+            </Field>
+          </div>
+        </div>
+
+        {service.fields?.length > 0 && (
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Service details</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {service.fields.map(fld => {
+                if (fld.type === 'select') {
+                  return (
+                    <Field key={fld.name} label={fld.label}>
+                      <select className={inputCls} value={f.data[fld.name] || ''} onChange={e=>updateData(fld.name, e.target.value)} required>
+                        <option value="">— Select —</option>
+                        {fld.options.map(o => <option key={o}>{o}</option>)}
+                      </select>
+                    </Field>
+                  );
+                }
+                if (fld.type === 'checkbox') {
+                  return (
+                    <label key={fld.name} className="flex items-center gap-2 mt-6">
+                      <input type="checkbox" className="w-4 h-4 accent-uinr" checked={!!f.data[fld.name]} onChange={e=>updateData(fld.name, e.target.checked)} />
+                      <span className="text-sm text-slate-700">{fld.label}</span>
+                    </label>
+                  );
+                }
+                return (
+                  <Field key={fld.name} label={fld.label}>
+                    <input type={fld.type || 'text'} className={inputCls} value={f.data[fld.name] || ''} onChange={e=>updateData(fld.name, e.target.value)} placeholder={fld.placeholder} required />
+                  </Field>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {requiredDocs.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Required documents</div>
+                <div className="text-[11px] text-slate-500">Use your phone camera for instant capture, or upload from gallery</div>
+              </div>
+              <div className="text-xs font-bold text-slate-700">
+                {Object.keys(docs).length} / {requiredDocs.filter(d=>!d.optional).length} required
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {requiredDocs.map(doc => (
+                <DocumentSlot key={doc.key} doc={doc} value={docs[doc.key]}
+                  onChange={(v) => setDocs(s => v ? { ...s, [doc.key]: v } : (() => { const n = {...s}; delete n[doc.key]; return n; })())}
+                  applicationRef={draftRef} pushToast={pushToast} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Step: Open the official portal */}
+        {portalUrl && (
+          <div className="bg-gradient-to-r from-uinr to-uinr-light text-white rounded-xl p-5">
+            <div className="flex items-center gap-2 mb-2">
+              <ArrowRight size={14} className="text-amber-300" />
+              <span className="text-[11px] font-bold uppercase tracking-widest text-white/80">Step 3 — apply on the official portal</span>
+            </div>
+            <div className="text-sm text-white/90 mb-3">
+              Click the button below to go to the official {service.agency} portal. Your prepared documents on UINR
+              will be ready for upload there. The agency issues the actual reference and processes payment.
+            </div>
+            <a href={portalUrl} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 bg-white text-uinr font-bold px-5 py-2.5 rounded-lg hover:bg-amber-50 transition shadow-lg">
+              Open {service.agency.split('·')[0].trim()} portal <ArrowRight size={16} />
+            </a>
+            <div className="text-[10px] text-white/60 mt-2 font-mono break-all">{portalUrl}</div>
+          </div>
+        )}
+
+        {/* External reference tracking */}
+        <div>
+          <div className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Step 4 — track the agency reference (optional)</div>
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+            <Field label="Agency reference number (after you submit on the official portal)">
+              <input className={inputCls} value={externalRef} onChange={e=>setExternalRef(e.target.value)}
+                placeholder="e.g. UG/PASS/2026/00012345" />
+            </Field>
+            <div className="text-[11px] text-slate-500 mt-2">
+              Once you have the agency reference, paste it here so UINR can show its status alongside your other applications. You can also add it later from the Applications page.
+            </div>
+          </div>
+        </div>
+
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-start gap-2">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          <div>
+            <span className="font-semibold">UINR is a navigator, not a payment processor.</span> We never collect government fees on your behalf. Always pay through the official channel listed above. If anyone asks you to pay UINR for a government service, report them.
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/* ===========================================================
+   Applications page — admin queue + my applications
+   =========================================================== */
+function ApplicationsPage({ state, user, dispatch, pushToast, addAudit }) {
+  const perms = permissions(user);
+  const scoped = perms.scopeDistrict
+    ? (state.applications || []).filter(a => a.district === perms.scopeDistrict)
+    : (state.applications || []);
+
+  const [q, setQ] = useState('');
+  const [fService, setFService] = useState('All');
+  const [fStatus, setFStatus] = useState('All');
+  const [viewing, setViewing] = useState(null);
+
+  const filtered = scoped.filter(a =>
+    (q === '' || a.citizenName.toLowerCase().includes(q.toLowerCase()) ||
+                 (a.citizenNin||'').toLowerCase().includes(q.toLowerCase()) ||
+                 (a.reference||'').toLowerCase().includes(q.toLowerCase())) &&
+    (fService === 'All' || a.serviceType === fService) &&
+    (fStatus === 'All' || a.status === fStatus)
+  );
+  const { sorted, headerClick, SortIcon } = useSorted(filtered, 'submittedAt');
+
+  const counts = APPLICATION_STATUSES.reduce((acc, s) => {
+    acc[s] = scoped.filter(a => a.status === s).length;
+    return acc;
+  }, {});
+
+  const setStatus = async (a, newStatus) => {
+    try {
+      const updated = { ...a, status: newStatus, reviewer: user.name };
+      await dispatch({ type:'APP_UPDATE', payload: updated });
+      addAudit('Edited', 'Applications', `${a.reference}: ${a.status} → ${newStatus}`, user);
+      pushToast('success', `${a.reference} marked ${newStatus}`);
+      setViewing(updated);
+    } catch (e) { pushToast('error', e.message); }
+  };
+
+  const doExport = () => {
+    exportCSV('applications.csv', sorted, [
+      { key:'reference', label:'Reference' }, { key:'serviceType', label:'Service' },
+      { key:'citizenName', label:'Citizen' }, { key:'citizenNin', label:'NIN' },
+      { key:'citizenPhone', label:'Phone' }, { key:'district', label:'District' },
+      { key:'status', label:'Status' }, { key:'submittedAt', label:'Submitted' },
+      { key:'reviewer', label:'Reviewer' }
+    ]);
+    pushToast('success', 'Exported applications.csv');
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Status overview */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        {APPLICATION_STATUSES.map(s => (
+          <div key={s} className="bg-white border border-slate-200 rounded-xl p-4">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">{s}</div>
+            <div className="text-2xl font-bold text-slate-900 mt-1 tabular-nums">{fmtNum(counts[s])}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name, NIN, or reference…"
+                 className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-uinr" />
+        </div>
+        <div className="flex items-center gap-2 text-sm">
+          <FilterIcon size={14} className="text-slate-400" />
+          <select className={inputCls + ' w-auto'} value={fService} onChange={e=>setFService(e.target.value)}>
+            <option>All</option>
+            {SERVICES.map(s => <option key={s.key}>{s.title}</option>)}
+          </select>
+          <select className={inputCls + ' w-auto'} value={fStatus} onChange={e=>setFStatus(e.target.value)}>
+            <option>All</option>
+            {APPLICATION_STATUSES.map(s => <option key={s}>{s}</option>)}
+          </select>
+        </div>
+        <button onClick={doExport} className="ml-auto flex items-center gap-2 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">
+          <Download size={16} /> Export CSV
+        </button>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-[920px]">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                {[['reference','Reference'],['serviceType','Service'],['citizenName','Citizen'],['citizenNin','NIN'],['district','District'],['status','Status'],['submittedAt','Submitted'],['reviewer','Reviewer']].map(([k,l])=>(
+                  <th key={k} onClick={()=>headerClick(k)} className="text-left px-4 py-2.5 font-medium cursor-pointer whitespace-nowrap">{l} <SortIcon k={k} /></th>
+                ))}
+                <th className="text-right px-4 py-2.5 font-medium">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.length === 0 && (
+                <tr><td colSpan="9" className="text-center py-8 text-slate-500">
+                  <FileText size={28} className="mx-auto mb-2 text-slate-300" />
+                  <div>No applications match your filters.</div>
+                </td></tr>
+              )}
+              {sorted.map(a => (
+                <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={()=>setViewing(a)}>
+                  <td className="px-4 py-2.5 font-mono text-xs font-semibold text-uinr">{a.reference}</td>
+                  <td className="px-4 py-2.5 text-slate-700">{a.serviceType}</td>
+                  <td className="px-4 py-2.5 font-medium text-slate-800">{a.citizenName}</td>
+                  <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{a.citizenNin || '—'}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{a.district}</td>
+                  <td className="px-4 py-2.5"><Badge kind={statusKind(a.status)}>{a.status}</Badge></td>
+                  <td className="px-4 py-2.5 text-slate-500 text-xs whitespace-nowrap">{a.submittedAt}</td>
+                  <td className="px-4 py-2.5 text-slate-600">{a.reviewer || '—'}</td>
+                  <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                    <button onClick={(e)=>{ e.stopPropagation(); setViewing(a); }}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-uinr hover:bg-sky-50">
+                      <Eye size={14} /> Review
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <Modal open={!!viewing} onClose={()=>setViewing(null)} wide
+        title={viewing ? `Application ${viewing.reference}` : ''}
+        footer={viewing && perms.canEdit && (
+          <div className="flex flex-wrap gap-2">
+            {viewing.status === 'Submitted' && <button onClick={()=>setStatus(viewing,'Under Review')} className="px-3 py-2 rounded-lg bg-sky-600 text-white text-sm hover:bg-sky-700">Start Review</button>}
+            {viewing.status !== 'Approved' && viewing.status !== 'Issued' && <button onClick={()=>setStatus(viewing,'Approved')} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm hover:bg-emerald-700">Approve</button>}
+            {viewing.status === 'Approved' && <button onClick={()=>setStatus(viewing,'Issued')} className="px-3 py-2 rounded-lg bg-uinr text-white text-sm hover:bg-uinr-dark">Mark Issued</button>}
+            {viewing.status !== 'Rejected' && viewing.status !== 'Issued' && <button onClick={()=>setStatus(viewing,'Rejected')} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-sm hover:bg-rose-700">Reject</button>}
+            <button onClick={()=>setViewing(null)} className="ml-auto px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-50 text-sm">Close</button>
+          </div>
+        )}>
+        {viewing && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <Badge kind="blue">{viewing.serviceType}</Badge>
+              <Badge kind={statusKind(viewing.status)}>{viewing.status}</Badge>
+              <span className="font-mono text-sm text-slate-500">{viewing.reference}</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <Stat label="Citizen name" value={viewing.citizenName} />
+              <Stat label="NIN" value={<span className="font-mono">{viewing.citizenNin || '—'}</span>} />
+              <Stat label="Mobile" value={viewing.citizenPhone || '—'} />
+              <Stat label="Email" value={viewing.citizenEmail || '—'} />
+              <Stat label="District" value={viewing.district} />
+              <Stat label="Submitted at" value={viewing.submittedAt} />
+              {viewing.data?.agencyReference && <Stat label="Agency reference" value={<span className="font-mono">{viewing.data.agencyReference}</span>} />}
+              {viewing.reviewer && <Stat label="Reviewer" value={viewing.reviewer} />}
+              {viewing.updatedAt && <Stat label="Last updated" value={viewing.updatedAt} />}
+            </div>
+
+            {viewing.data?.officialPortal && (
+              <a href={viewing.data.officialPortal} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 text-sm font-semibold text-uinr hover:underline">
+                <ArrowRight size={14} /> Open the official portal for this service
+              </a>
+            )}
+            {viewing.data && Object.keys(viewing.data).filter(k => k !== 'documents').length > 0 && (
+              <div className="border-t pt-3">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Service-specific details</div>
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                  {Object.entries(viewing.data).filter(([k]) => k !== 'documents').map(([k, v]) => (
+                    <Stat key={k} label={k.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase())}
+                      value={typeof v === 'boolean' ? (v ? 'Yes' : 'No') : (v || '—')} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {viewing.data?.documents && Object.keys(viewing.data.documents).length > 0 && (
+              <div className="border-t pt-3">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Supporting documents</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {Object.entries(viewing.data.documents).map(([k, doc]) => (
+                    <ApplicationDocLink key={k} docKey={k} doc={doc} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+/* ===========================================================
+   Admin document preview link (signed URL fetched on demand)
+   =========================================================== */
+function ApplicationDocLink({ docKey, doc }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (doc?.path && supabaseConfigured && !doc.demo) {
+      getDocumentSignedUrl(doc.path).then(u => { if (!cancelled) setUrl(u); });
+    } else if (doc?.demo) {
+      setUrl(doc.path);
+    }
+    return () => { cancelled = true; };
+  }, [doc]);
+  const isImage = doc?.type?.startsWith('image/');
+  const label = docKey.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+  return (
+    <div className="border border-slate-200 rounded-lg p-3 flex items-start gap-3 bg-white">
+      <div className="bg-sky-100 text-sky-700 p-2 rounded-lg shrink-0">
+        {isImage ? <FileImage size={16} /> : <FileText size={16} />}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-semibold text-slate-800 truncate">{label}</div>
+        <div className="text-xs text-slate-500 truncate font-mono">{doc?.name}</div>
+        <div className="text-xs text-slate-500 mt-0.5">{((doc?.size || 0) / 1024).toFixed(0)} KB</div>
+        {url ? (
+          <div className="mt-2 flex items-center gap-2">
+            <a href={url} target="_blank" rel="noopener noreferrer"
+              className="text-xs font-semibold text-uinr hover:underline flex items-center gap-1">
+              <Eye size={12} /> View
+            </a>
+            <a href={url} download={doc?.name}
+              className="text-xs font-semibold text-slate-600 hover:underline flex items-center gap-1">
+              <Download size={12} /> Download
+            </a>
+          </div>
+        ) : (
+          <div className="mt-2 text-[11px] text-slate-400">Loading preview…</div>
+        )}
+      </div>
+      {url && isImage && (
+        <img src={url} alt={label} className="w-16 h-16 rounded-lg object-cover border border-slate-200 shrink-0" />
+      )}
+    </div>
+  );
+}
+
+/* ===========================================================
+   Setup Wizard — guided in-app schema deployment
+   =========================================================== */
+const SETUP_STEPS = [
+  { key:'v1_schema', n:'01', title:'Base schema',           summary:'Core tables: students, hospitals, families, audit_log, sync_status, settings, admins',                  sql: sql_v1_schema },
+  { key:'v1_auth',   n:'02', title:'Auth + Row-Level Security', summary:'profiles table, role/district helpers, RLS policies, auto-create-profile trigger',                  sql: sql_v1_auth   },
+  { key:'v2',        n:'03', title:'Bursary, special needs, billing', summary:'New columns on students/hospitals; billing_history table with seed transactions',             sql: sql_v2        },
+  { key:'v3',        n:'04', title:'146 districts + 140 real schools', summary:'Full district list, schools lookup table seeded with Gayaza, Makerere, Ntare, etc.',         sql: sql_v3        },
+  { key:'v4',        n:'05', title:'Optional NIN + religion',  summary:'Allows registering children without ID cards. Adds religion to students and families.',             sql: sql_v4        },
+  { key:'v5',        n:'06', title:'Realistic-scale demo data', summary:'Generates ~500 students, ~130 hospitals, ~200 families with full trees. Optional — for demos only.', sql: sql_v5,  optional: true },
+  { key:'v6',        n:'07', title:'Services portal + applications', summary:'Adds phone columns, applications table for passport/driving-permit/banking, 10 seeded demo applications.', sql: sql_v6 },
+  { key:'v7',        n:'08', title:'Document storage (bucket + RLS)',  summary:'Creates Supabase Storage bucket for NIN copies, photos, LC1 letters, etc. Citizens upload via phone camera; officers view in review queue.', sql: sql_v7 }
+];
+
+function SetupWizard({ pushToast }) {
+  const [health, setHealth] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const [openStep, setOpenStep] = useState(null);
+
+  const check = useCallback(async () => {
+    if (!supabaseConfigured) return;
+    setChecking(true);
+    try { setHealth(await setupHealth()); }
+    catch (e) { pushToast('error', `Health check failed: ${e.message}`); }
+    finally { setChecking(false); }
+  }, [pushToast]);
+
+  useEffect(() => { check(); }, [check]);
+
+  const doneCount   = health ? SETUP_STEPS.filter(s => health[s.key]).length : 0;
+  const totalCount  = SETUP_STEPS.length;
+  const allRequired = health && SETUP_STEPS.filter(s => !s.optional).every(s => health[s.key]);
+  const allDone     = health && SETUP_STEPS.every(s => health[s.key]);
+
+  const supabaseUrl = supabaseConfigured ? import.meta.env.VITE_SUPABASE_URL : '';
+  const projectRef  = supabaseUrl ? supabaseUrl.match(/https?:\/\/([^.]+)/)?.[1] : '';
+  const sqlEditorUrl = projectRef ? `https://supabase.com/dashboard/project/${projectRef}/sql/new` : '';
+
+  if (!supabaseConfigured) {
+    return (
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 text-sm text-amber-900">
+        Connect a Supabase project first (set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env), then come back here.
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+      <div className={`px-6 py-5 border-b border-slate-100 ${allDone ? 'bg-gradient-to-r from-emerald-50 to-white' : allRequired ? 'bg-gradient-to-r from-sky-50 to-white' : 'bg-gradient-to-r from-amber-50 to-white'}`}>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-xl ${allDone ? 'bg-emerald-100 text-emerald-700' : allRequired ? 'bg-sky-100 text-sky-700' : 'bg-amber-100 text-amber-700'}`}>
+              {allDone ? <CheckCircle2 size={22} /> : allRequired ? <Database size={22} /> : <ShieldAlert size={22} />}
+            </div>
+            <div>
+              <div className="font-bold text-slate-900 text-lg">Database setup</div>
+              <div className="text-sm text-slate-600 mt-0.5">
+                {allDone ? "Everything is deployed. You're ready to go."
+                  : allRequired ? "Required migrations are deployed. Optional ones are still available."
+                  : `${doneCount} of ${totalCount} migrations complete`}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={check} disabled={checking}
+              className="flex items-center gap-2 px-3 py-2 border border-slate-300 rounded-lg text-sm hover:bg-white disabled:opacity-50">
+              {checking ? <Loader2 size={14} className="animate-spin" /> : <RefreshCcw size={14} />}
+              Re-check
+            </button>
+            {sqlEditorUrl && (
+              <a href={sqlEditorUrl} target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-2 px-3 py-2 bg-uinr text-white rounded-lg text-sm hover:bg-uinr-dark">
+                <ArrowRight size={14} /> Open Supabase SQL Editor
+              </a>
+            )}
+          </div>
+        </div>
+
+        {/* Progress bar */}
+        <div className="mt-4 h-2 bg-white rounded-full overflow-hidden border border-slate-200">
+          <div className="h-full transition-all duration-500 bg-gradient-to-r from-emerald-500 to-emerald-400"
+            style={{ width: `${health ? (doneCount/totalCount)*100 : 0}%` }} />
+        </div>
+      </div>
+
+      <ol className="divide-y divide-slate-100">
+        {SETUP_STEPS.map(step => {
+          const done = health?.[step.key];
+          const isOpen = openStep === step.key;
+          return (
+            <li key={step.key} className="px-6 py-4">
+              <div className="flex items-center gap-4">
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
+                  done ? 'bg-emerald-100 text-emerald-700'
+                       : 'bg-slate-100 text-slate-500'
+                }`}>
+                  {done ? <Check size={16} /> : step.n}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="font-semibold text-slate-900">{step.title}</div>
+                    {step.optional && <Badge kind="gray">Optional</Badge>}
+                    {done && <Badge kind="green">Deployed</Badge>}
+                    {!done && !step.optional && <Badge kind="amber">Required</Badge>}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">{step.summary}</div>
+                </div>
+                <button onClick={()=>setOpenStep(isOpen ? null : step.key)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg ${
+                    done ? 'text-slate-600 hover:bg-slate-100' : 'bg-uinr text-white hover:bg-uinr-dark'
+                  }`}>
+                  {isOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  {done ? (isOpen ? 'Hide' : 'View SQL') : (isOpen ? 'Hide' : 'Show SQL')}
+                </button>
+              </div>
+
+              {isOpen && (
+                <div className="mt-4 ml-13 space-y-3">
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg overflow-hidden">
+                    <div className="px-4 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">SQL · paste into Supabase SQL Editor</span>
+                      <button onClick={()=>{ navigator.clipboard.writeText(step.sql); pushToast('success', `SQL for "${step.title}" copied`); }}
+                        className="flex items-center gap-1.5 text-xs font-semibold text-uinr hover:underline">
+                        <FileText size={12} /> Copy SQL
+                      </button>
+                    </div>
+                    <pre className="text-[11px] font-mono p-3 max-h-72 overflow-auto whitespace-pre text-slate-700">
+{step.sql.slice(0, 4000)}{step.sql.length > 4000 ? `\n\n…(${step.sql.length - 4000} more characters — use Copy SQL to get the full script)` : ''}
+                    </pre>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-2 sm:items-center text-xs">
+                    <div className="text-slate-600 flex-1">
+                      <span className="font-semibold text-slate-900">How to apply:</span> Click "Copy SQL" above → "Open Supabase SQL Editor" at the top → paste → Run.
+                      Then click "Re-check" to verify it's deployed.
+                    </div>
+                    <button onClick={check} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 rounded-lg hover:bg-white">
+                      <RefreshCcw size={12} /> Re-check
+                    </button>
+                  </div>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+
+      {allDone && (
+        <div className="px-6 py-4 bg-emerald-50 border-t border-emerald-200 text-sm text-emerald-900 flex items-start gap-2">
+          <Sparkles size={16} className="mt-0.5 shrink-0" />
+          <div>
+            <div className="font-semibold">All migrations deployed.</div>
+            <div className="text-xs mt-0.5 text-emerald-800">
+              The system is fully operational. No further developer work needed.
+              You can manage users, records, billing, and settings entirely from this app.
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ===========================================================
    App-level reducer
    =========================================================== */
 const initialState = {
@@ -4181,12 +5677,16 @@ const initialState = {
   families: INITIAL_FAMILIES,
   audit: INITIAL_AUDIT,
   admins: INITIAL_ADMINS,
-  sync: INITIAL_SYNC
+  sync: INITIAL_SYNC,
+  applications: []
 };
 
 function reducer(state, action) {
   switch (action.type) {
     case 'SET_ALL':        return { ...state, ...action.payload };
+    case 'APP_ADD':        return { ...state, applications: [action.payload, ...(state.applications||[])] };
+    case 'APP_UPDATE':     return { ...state, applications: (state.applications||[]).map(a => a.id === action.payload.id ? action.payload : a) };
+    case 'APP_DELETE':     return { ...state, applications: (state.applications||[]).filter(a => a.id !== action.payload) };
     case 'STUDENT_ADD':    return { ...state, students: [action.payload, ...state.students] };
     case 'STUDENT_UPDATE': return { ...state, students: state.students.map(s => s.id === action.payload.id ? action.payload : s) };
     case 'STUDENT_DELETE': return { ...state, students: state.students.filter(s => s.id !== action.payload) };
@@ -4258,7 +5758,8 @@ export default function App() {
         families:  data.families,
         audit:     data.audit,
         admins:    data.admins,
-        sync:      data.sync
+        sync:      data.sync,
+        applications: data.applications || []
       }});
       if (data.settings) setSettings(prev => ({ ...prev, ...data.settings }));
       if (data.billing) setBilling(data.billing);
@@ -4333,6 +5834,9 @@ export default function App() {
         case 'USER_ADD':       payload = await api.admins.add(action.payload); break;
         case 'USER_UPDATE':    payload = await api.admins.update(action.payload.id, action.payload); break;
         case 'AUDIT_ADD':      payload = await api.audit.add(action.payload); break;
+        case 'APP_ADD':        payload = await api.applications.add(action.payload); break;
+        case 'APP_UPDATE':     payload = await api.applications.update(action.payload.id, action.payload); break;
+        case 'APP_DELETE':     await api.applications.remove(action.payload); break;
         default: break;
       }
       dispatch({ ...action, payload });
@@ -4510,6 +6014,9 @@ export default function App() {
     students:  { title:'Students',           subtitle:'Education records linked by NIN' },
     hospitals: { title:'Hospitals',          subtitle:'Health facilities and capacity' },
     families:  { title:'Family Trees',       subtitle:'Multi-generational household records' },
+    citizens:  { title:'Citizen Search',     subtitle:'Find anyone by NIN, name, phone, or district' },
+    services:  { title:'Service Portal',     subtitle:'Apply for passports, permits, banking, and more' },
+    applications: { title:'Applications',    subtitle:'Track and review citizen service requests' },
     reports:   { title:'Reports',            subtitle:'Ministry-ready printable summaries' },
     audit:     { title:'Audit Log',          subtitle:'Immutable record of every action' },
     roles:     { title:'User Management',    subtitle:'Invite, suspend, and assign roles' },
@@ -4537,6 +6044,9 @@ export default function App() {
           {section === 'hospitals' && <HospitalsPage hospitals={state.hospitals} dispatch={wdispatch} user={user} pushToast={push} addAudit={addAudit} />}
           {section === 'families'  && <FamiliesPage families={state.families} students={state.students} hospitals={state.hospitals} dispatch={wdispatch} user={user} pushToast={push} addAudit={addAudit} openProfile={openProfile} />}
           {section === 'reports'   && <ReportsPage state={state} openReport={setActiveReport} />}
+          {section === 'citizens'  && <CitizenSearchPage state={state} openProfile={openProfile} setSection={setSection} />}
+          {section === 'services'  && <ServicesHubPage state={state} user={user} dispatch={wdispatch} pushToast={push} addAudit={addAudit} />}
+          {section === 'applications' && <ApplicationsPage state={state} user={user} dispatch={wdispatch} pushToast={push} addAudit={addAudit} />}
           {section === 'audit'     && <AuditPage audit={state.audit} user={user} pushToast={push} />}
           {section === 'roles' && user.role === 'Super Admin' && <RolesPage admins={state.admins} dispatch={wdispatch} user={user} pushToast={push} addAudit={addAudit} />}
           {section === 'billing' && user.role === 'Super Admin' && <BillingPage settings={settings} setSettings={setSettings} billing={billing} state={state} pushToast={push} addAudit={addAudit} user={user} />}

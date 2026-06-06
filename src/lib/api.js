@@ -9,7 +9,7 @@ const mapStudent = {
     level: r.level, enrolmentYear: r.enrolment_year, unebResults: r.uneb_results,
     status: r.status, guardianNin: r.guardian_nin || '',
     bursaryEligible: !!r.bursary_eligible, specialNeeds: !!r.special_needs,
-    religion: r.religion || ''
+    religion: r.religion || '', phone: r.phone || ''
   }),
   toDb: (s) => ({
     name: s.name,
@@ -19,7 +19,26 @@ const mapStudent = {
     status: s.status,
     guardian_nin: s.guardianNin ? s.guardianNin : null,
     bursary_eligible: !!s.bursaryEligible, special_needs: !!s.specialNeeds,
-    religion: s.religion || null
+    religion: s.religion || null, phone: s.phone || null
+  })
+};
+
+const mapApplication = {
+  fromDb: (r) => ({
+    id: r.id, citizenName: r.citizen_name, citizenNin: r.citizen_nin || '',
+    citizenPhone: r.citizen_phone || '', citizenEmail: r.citizen_email || '',
+    serviceType: r.service_type, status: r.status, data: r.data || {},
+    district: r.district || '', reference: r.reference || '',
+    submittedAt: r.submitted_at ? r.submitted_at.slice(0,16).replace('T',' ') : '',
+    updatedAt: r.updated_at ? r.updated_at.slice(0,16).replace('T',' ') : '',
+    reviewer: r.reviewer || '', notes: r.notes || ''
+  }),
+  toDb: (a) => ({
+    citizen_name: a.citizenName, citizen_nin: a.citizenNin || null,
+    citizen_phone: a.citizenPhone || null, citizen_email: a.citizenEmail || null,
+    service_type: a.serviceType, status: a.status || 'Submitted',
+    data: a.data || {}, district: a.district || null,
+    reviewer: a.reviewer || null, notes: a.notes || null
   })
 };
 
@@ -132,6 +151,107 @@ export async function loadSchools() {
 }
 
 /* ============================================================
+   Document upload (Supabase Storage)
+   ============================================================ */
+const DOCS_BUCKET = 'uinr-documents';
+
+export async function uploadDocument(file, applicationRef, docKey) {
+  if (!isConfigured) throw new Error('Supabase is not configured.');
+  if (!file) throw new Error('No file selected.');
+  if (file.size > 10 * 1024 * 1024) throw new Error('File is larger than 10 MB.');
+
+  const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
+  const safeRef = (applicationRef || 'draft').replace(/[^a-zA-Z0-9-]/g, '_');
+  const path = `applications/${safeRef}/${docKey}-${Date.now()}.${ext}`;
+
+  const { error } = await supabase.storage
+    .from(DOCS_BUCKET)
+    .upload(path, file, { contentType: file.type, upsert: true });
+  if (error) throw new Error(error.message);
+
+  return {
+    path,
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    uploadedAt: new Date().toISOString()
+  };
+}
+
+export async function getDocumentSignedUrl(path) {
+  if (!isConfigured) return null;
+  const { data, error } = await supabase.storage
+    .from(DOCS_BUCKET)
+    .createSignedUrl(path, 3600); // 1 hour
+  if (error) return null;
+  return data?.signedUrl || null;
+}
+
+export async function deleteDocument(path) {
+  if (!isConfigured) return;
+  await supabase.storage.from(DOCS_BUCKET).remove([path]);
+}
+
+/* ============================================================
+   Health checks for the setup wizard
+   ============================================================ */
+async function tableExists(table) {
+  if (!isConfigured) return false;
+  const { error } = await supabase.from(table).select('*', { head: true, count: 'exact' }).limit(1);
+  if (error && /relation .* does not exist/i.test(error.message)) return false;
+  // PostgREST returns 200 or 401/403 if RLS blocks — table exists either way
+  if (error && /permission denied/i.test(error.message)) return true;
+  return !error;
+}
+
+async function columnExists(table, column) {
+  if (!isConfigured) return false;
+  const { error } = await supabase.from(table).select(column, { head: true, count: 'exact' }).limit(1);
+  if (error && /column .* does not exist/i.test(error.message)) return false;
+  if (error && /relation .* does not exist/i.test(error.message)) return false;
+  return !error || /permission denied/i.test(error.message);
+}
+
+async function countRows(table) {
+  if (!isConfigured) return 0;
+  const { count, error } = await supabase.from(table).select('*', { head: true, count: 'exact' });
+  if (error) return 0;
+  return count || 0;
+}
+
+export async function setupHealth() {
+  const checks = {};
+  // V1 — base schema
+  checks.v1_schema = await tableExists('students')
+                  && await tableExists('hospitals')
+                  && await tableExists('families')
+                  && await tableExists('audit_log')
+                  && await tableExists('sync_status');
+  // V1 — auth + RLS
+  checks.v1_auth = await tableExists('profiles');
+  // V2 — bursary/special needs/billing
+  checks.v2 = await columnExists('students', 'bursary_eligible')
+           && await columnExists('students', 'special_needs')
+           && await columnExists('hospitals', 'active_patients')
+           && await tableExists('billing_history');
+  // V3 — schools + 146 districts seed
+  checks.v3 = await tableExists('schools') && ((await countRows('sync_status')) > 50);
+  // V4 — nullable nin + religion
+  checks.v4 = await columnExists('students', 'religion');
+  // V5 — realistic data (optional)
+  checks.v5 = (await countRows('students')) >= 100;
+  // V6 — services portal
+  checks.v6 = await tableExists('applications') && await columnExists('students', 'phone');
+  // V7 — document storage bucket
+  try {
+    const { data: buckets } = await supabase.storage.listBuckets();
+    checks.v7 = !!(buckets || []).find(b => b.id === 'uinr-documents');
+  } catch { checks.v7 = false; }
+
+  return checks;
+}
+
+/* ============================================================
    Connection probe
    ============================================================ */
 export async function ping() {
@@ -146,7 +266,7 @@ export async function ping() {
    ============================================================ */
 export async function loadAll() {
   need();
-  const [students, hospitals, families, audit, admins, sync, settings, billing] = await Promise.all([
+  const [students, hospitals, families, audit, admins, sync, settings, billing, applications] = await Promise.all([
     supabase.from('students').select('*').order('name'),
     supabase.from('hospitals').select('*').order('name'),
     supabase.from('families').select('*').order('head'),
@@ -154,7 +274,8 @@ export async function loadAll() {
     supabase.from('admins').select('*').order('name'),
     supabase.from('sync_status').select('*').order('district'),
     supabase.from('settings').select('*').eq('id', 1).single(),
-    supabase.from('billing_history').select('*').order('date', { ascending:false })
+    supabase.from('billing_history').select('*').order('date', { ascending:false }),
+    supabase.from('applications').select('*').order('submitted_at', { ascending:false }).limit(500)
   ]);
   const oops = [students, hospitals, families, audit, admins, sync, settings].find(r => r.error);
   if (oops) throw new Error(oops.error.message);
@@ -167,7 +288,8 @@ export async function loadAll() {
     admins:    admins.data.map(mapAdmin.fromDb),
     sync:      sync.data.map(mapSync.fromDb),
     settings:  settings.data ? mapSettings.fromDb(settings.data) : null,
-    billing:   billing.error ? [] : (billing.data || []).map(mapBilling.fromDb)
+    billing:   billing.error ? [] : (billing.data || []).map(mapBilling.fromDb),
+    applications: applications?.error ? [] : (applications?.data || []).map(mapApplication.fromDb)
   };
 }
 
@@ -218,6 +340,25 @@ export const api = {
       const { data, error } = await supabase.from('audit_log').insert(mapAudit.toDb(a)).select().single();
       if (error) throw new Error(error.message);
       return mapAudit.fromDb(data);
+    }
+  },
+  applications: {
+    add: async (a) => {
+      if (!isConfigured) return { ...a, id: Date.now(), reference: 'UINR-' + new Date().getFullYear() + '-' + Math.random().toString(36).slice(2,8).toUpperCase() };
+      const { data, error } = await supabase.from('applications').insert(mapApplication.toDb(a)).select().single();
+      if (error) throw new Error(error.message);
+      return mapApplication.fromDb(data);
+    },
+    update: async (id, a) => {
+      need();
+      const { data, error } = await supabase.from('applications').update(mapApplication.toDb(a)).eq('id', id).select().single();
+      if (error) throw new Error(error.message);
+      return mapApplication.fromDb(data);
+    },
+    remove: async (id) => {
+      need();
+      const { error } = await supabase.from('applications').delete().eq('id', id);
+      if (error) throw new Error(error.message);
     }
   },
   settings:  {
